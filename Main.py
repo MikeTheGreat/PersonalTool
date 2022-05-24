@@ -133,23 +133,11 @@ viewer = SimplePDFViewer(fd)
 
 continue_searching = True # to break out of nested loops
 for canvas in viewer:
-    # page_images = canvas.images
-    # page_forms = canvas.forms
-    # page_text = canvas.text_content
-    # print(page_text)
-    # print("==================")
-    page_strings = canvas.strings
+    # page_text = canvas.text_content # text_content has lots of extra info & formatting, etc
+    page_strings = canvas.strings # this is a list of the actual text that we want to process
     print(page_strings)
 
-    # lines = page_text.splitlines()
     for line in page_strings:
-        # if line.endswith("Tj"):
-        # match = re.search(reLineOfData, line)
-        # if match:
-        #     line = match.group(1)
-
-            # print("Current state:" + current_state.getCurrentState())
-
         if current_state.getCurrentState() == PREVIOUS_BALANCE_DATE:
             match = re.search(rePREVIOUS_BALANCE_DATE, line)
             if match:
