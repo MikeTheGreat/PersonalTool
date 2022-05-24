@@ -19,18 +19,16 @@ reLineOfData = re.compile("\((.*)\) Tj")
 PREVIOUS_BALANCE_DATE: str = "Previous balance as of"
 rePREVIOUS_BALANCE_DATE = re.compile("Previous balance as of (\d\d/\d\d/\d\d\d\d)")
 
+START_OF_TRANSACTION_DETAILS: str = "Transaction details"
+TYPE_OF_TRANSACTIONS: str = "TYPE_OF_TRANSACTIONS (this string does not occur in the file itself)"
+END_OF_TRANSACTION_DETAILS:str = "(Continued on next page)"
+
+START_OF_PAYMENTS: str = "Payments"
+START_OF_PAYMENTS_TABLE: str = "Reference #"
+PAYMENTS: str = "Reading payment lines (this string does not occur in the file itself)"
+
 START_OF_PURCHASES: str = "Purchases and other debits"
-
 PURCHASES: str = "Reading purchase lines (this string does not occur in the file itself)"
-
-DATE: str = 'date'
-reDateOfPurchase = re.compile("(\d\d/\d\d)")
-
-REF: str = 'ref'
-
-DESC: str = 'desc'
-
-AMT: str = 'amt'
 
 FINISHED: str = "Total fees charged this period"
 
@@ -38,8 +36,12 @@ FINISHED: str = "Total fees charged this period"
 @define
 class States:
     # what are we looking for next?
-    possible_states: [str] = [PREVIOUS_BALANCE_DATE, START_OF_PURCHASES, PURCHASES, FINISHED]
-    current_state: int = 0
+    possible_states: [str]
+    current_state: int
+
+    def __init__(self, states):
+        self.possible_states = states
+        self.current_state = 0
 
     def getCurrentState(self):
         return self.possible_states[self.current_state]
@@ -50,69 +52,78 @@ class States:
         self.current_state = self.possible_states.index(newState)
 
 @define
-class Purchase:
+class Transaction:
     date: Any = None
     reference_num: str = ""
     description: str = ""
     amount: Decimal = 0
 
 
+DATE: str = 'date'
+reDateOfTransaction = re.compile("(\d\d/\d\d)")
+REF: str = 'ref'
+DESC: str = 'desc'
+AMT: str = 'amt'
+
 @define
-class StatesReadingLine(States):
-    # what are we looking for next?
-    possible_states: [str] = [DATE, REF, DESC, AMT, FINISHED]
-    current_state: int = 0
-    cur_purchase: Purchase = Purchase()
-    previous_date: date = None
+class ReadingLineStates(States):
+    cur_xact: Transaction   # We'll reset to a new object a lot
+    previous_date: date     # So remember when the last transaction was separate from cur_xact
+
+    def __init__(self):
+        super().__init__([DATE, REF, DESC, AMT, FINISHED])
+        self.previous_date = None
+        self.reset()
 
     def reset(self):
-        self.cur_purchase = Purchase()
+        self.cur_xact = Transaction()
         self.setCurrentState(DATE)
 
     def processLine(self, line):
-        global starting_year
+        global previous_balance_date
 
         if self.getCurrentState() == DATE:
-            if re.search(reDateOfPurchase, line):
+            if re.search(reDateOfTransaction, line):
                 # print("FOUND A DATE!!!!!")
-                # reuse the current year
+                assert previous_balance_date is not None
+
                 if self.previous_date is not None:
-                    starting_year = self.previous_date.year
-
-                xact_date = datetime.strptime(line + "/" + str(starting_year), "%m/%d/%Y").date()
-
-                # simple progression of dates OR
-                # can have transactions left over from  before the 'previous balance due' date that we start with
-                # or we can wrap around back to January?
-                if (self.previous_date is None and starting_year != 0) or \
-                        (xact_date >= self.previous_date) or \
-                        (self.previous_date.month == 12 and xact_date.month == 1):
-
-                    if self.previous_date is None and starting_year != 0:
-                        xact_date = date(starting_year, xact_date.month, xact_date.day)
-
-                    elif self.previous_date.month == 12 and xact_date.month == 1:
-                        xact_date = date(xact_date.year + 1, xact_date.month, xact_date.day)
-
-                    self.cur_purchase.date = xact_date
-                    self.previous_date = xact_date
-                    self.setCurrentState(REF)
-
+                    xact_year = self.previous_date.year
                 else:
-                    print(
-                        "Found a date, but it looks weird compared to the previous\n\tprev: " + self.previous_date + "\n\t new: " + xact_date)
+                    xact_year = previous_balance_date.year
+
+                xact_date = datetime.strptime(line + "/" + str(xact_year), "%m/%d/%Y").date()
+
+                # if the previous date is in last Dec & the current date is in January:
+                if  self.previous_date is not None and \
+                        self.previous_date.month == 12 and xact_date.month == 1:
+                    xact_date = date(xact_date.year + 1, xact_date.month, xact_date.day)
+
+                # If the first date we're seeing is in January but the prior balance
+                # date is in Dec the move the year up
+                if  self.previous_date is None and \
+                        xact_date < previous_balance_date:
+                    xact_date = date(xact_date.year + 1, xact_date.month, xact_date.day)
+
+                self.cur_xact.date = xact_date
+                self.previous_date = xact_date
+                self.setCurrentState(REF)
+
+                # else:
+                #     print(
+                #         "Found a date, but it looks weird compared to the previous\n\tprev: " + self.previous_date + "\n\t new: " + xact_date)
 
         elif self.getCurrentState() == REF:
-            self.cur_purchase.reference_num = line
+            self.cur_xact.reference_num = line
             self.setCurrentState(DESC)
 
         elif self.getCurrentState() == DESC:
-            self.cur_purchase.description = line
+            self.cur_xact.description = line
             self.setCurrentState(AMT)
 
         elif self.getCurrentState() == AMT:
             value = Decimal(re.sub(r'[^\d.]', '', line))
-            self.cur_purchase.amount = value
+            self.cur_xact.amount = value
 
             self.setCurrentState(FINISHED)
 
@@ -121,10 +132,33 @@ class StatesReadingLine(States):
 
         return self.getCurrentState()
 
-starting_year: int = 0
-list_of_purchases: [Purchase] = []
-current_state = States()
-line_reader = StatesReadingLine()
+class ProgramStates(States):
+
+    def __init__(self):
+        super().__init__([PREVIOUS_BALANCE_DATE, \
+                              START_OF_TRANSACTION_DETAILS, \
+                              TYPE_OF_TRANSACTIONS, \
+                              START_OF_PAYMENTS, START_OF_PAYMENTS_TABLE, \
+                              PAYMENTS, \
+                              START_OF_PURCHASES, \
+                              PURCHASES, \
+                              END_OF_TRANSACTION_DETAILS, \
+                              FINISHED])
+
+class TransactionStates(States):
+
+    def __init__(self):
+        super().__init__([NO_XACTS_YET, \
+                            PAYMENTS, \
+                            PURCHASES])
+
+previous_balance_date: date = None
+all_purchases: [Transaction] = []
+all_payments: [Transaction] = []
+current_state = ProgramStates()
+NO_XACTS_YET:str = "Haven't seen any transactions yet (this string does not occur in the file itself)"
+current_xact_type = TransactionStates()
+line_reader = ReadingLineStates()
 
 fd = open(file_to_parse, "rb")
 viewer = SimplePDFViewer(fd)
@@ -135,29 +169,68 @@ continue_searching = True # to break out of nested loops
 for canvas in viewer:
     # page_text = canvas.text_content # text_content has lots of extra info & formatting, etc
     page_strings = canvas.strings # this is a list of the actual text that we want to process
-    print(page_strings)
+    # print(page_strings)
 
     for line in page_strings:
+        print("\t\tline: " + line)
+
         if current_state.getCurrentState() == PREVIOUS_BALANCE_DATE:
             match = re.search(rePREVIOUS_BALANCE_DATE, line)
             if match:
-                starting_year = datetime.strptime(match.group(1), "%m/%d/%Y").year
-                print("Starting year: " + str(starting_year) + "  =================")
-                current_state.setCurrentState(START_OF_PURCHASES)
+                previous_balance_date = datetime.strptime(match.group(1), "%m/%d/%Y").date()
+                print("previous_balance_date: " + str(previous_balance_date) + " <= This is the starting year =================")
+                current_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
 
-        elif current_state.getCurrentState() == START_OF_PURCHASES:
+        elif current_state.getCurrentState() == START_OF_TRANSACTION_DETAILS:
+            if START_OF_TRANSACTION_DETAILS in line:
+                print("FOUND TRANSACTION DETAILS!!!!! ===================================================")
+
+                if current_xact_type.getCurrentState() == NO_XACTS_YET:
+                    current_state.setCurrentState(TYPE_OF_TRANSACTIONS)
+                else: # otherwise keep looking for whatever sort of xact we've most recently seen:
+                    current_state.setCurrentState(current_xact_type.getCurrentState())
+
+        elif current_state.getCurrentState() == TYPE_OF_TRANSACTIONS:
+            if START_OF_PAYMENTS in line:
+                print("FOUND PAYMENTS!!!!! ===================================================")
+                current_state.setCurrentState(PAYMENTS)
+                current_xact_type.setCurrentState(PAYMENTS)
+                line_reader = ReadingLineStates()
+
+            elif START_OF_PURCHASES in line:
+                print("FOUND START_OF_PURCHASES !!!!! ===================================================")
+                current_state.setCurrentState(START_OF_PURCHASES)
+                current_xact_type.setCurrentState(PURCHASES)
+                line_reader = ReadingLineStates()
+
+            elif END_OF_TRANSACTION_DETAILS in line:
+                current_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
+                print("END OF TRANSACTION DETAILS ==========================================================")
+                line_reader.reset() # dump any partial info
+
+        elif current_state.getCurrentState() == PAYMENTS:
             if START_OF_PURCHASES in line:
-                print("FOUND PURCHASES!!!!! ============================================================")
                 current_state.setCurrentState(PURCHASES)
+                current_xact_type.setCurrentState(PURCHASES)
+                print("END OF PAYMENTS, START OF PURCHASES!!!! ============================================================")
+                line_reader = ReadingLineStates()
+
+            elif END_OF_TRANSACTION_DETAILS in line:
+                current_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
+                print("END OF TRANSACTION DETAILS ==========================================================")
+                line_reader.reset() # dump any partial info
+
+            elif line_reader.processLine(line) == FINISHED:
+                all_payments.append(line_reader.cur_xact)
+                line_reader.reset()
 
         elif current_state.getCurrentState() == PURCHASES:
-
             # If we see the 'end of purchases' marker then go directly to the FINISHED state
             if FINISHED in line:
                 current_state.setCurrentState(FINISHED)
                 print("END OF TRANSACTIONS!!!! ============================================================")
             elif line_reader.processLine(line) == FINISHED:
-                    list_of_purchases.append(line_reader.cur_purchase)
+                    all_purchases.append(line_reader.cur_xact)
                     line_reader.reset()
 
         elif current_state.getCurrentState() == FINISHED:
@@ -172,12 +245,21 @@ for canvas in viewer:
         break
 
 print("\n================================================\n")
+
 total = Decimal(0)
-for p in list_of_purchases:
+for p in all_payments:
+    print(p)
+    total = total + p.amount
+print("\nFound a total of " + str(len(all_payments)) + " purchases")
+print("Total payments: " + str(total))
+
+
+total = Decimal(0)
+for p in all_purchases:
     print(p)
     total = total + p.amount
 
-print("\nFound a total of " + str(len(list_of_purchases)) + " purchases")
+print("\nFound a total of " + str(len(all_purchases)) + " purchases")
 print("Total cost: " + str(total))
 
 
