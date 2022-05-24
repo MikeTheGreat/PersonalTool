@@ -3,34 +3,24 @@
 # TODO: convert first field into date object
 
 
-from  datetime import date, datetime
 import re
+from datetime import date, datetime
 from decimal import *
 from typing import Any
-from pdfreader import SimplePDFViewer
+
 from attrs import define
+from pdfreader import SimplePDFViewer
 
 # file_to_parse = """C:\MikesStuff\Pers\Dropbox\Personal\Finance, Insurance, Etc\Downloads\Venmo\\05-19-2022.pdf"""
 file_to_parse = """C:\MikesStuff\Pers\Dropbox\Personal\Finance, Insurance, Etc\Downloads\Venmo\\01-19-2022.pdf"""
 
 
-reLineOfData = re.compile("\((.*)\) Tj")
-
-PREVIOUS_BALANCE_DATE: str = "Previous balance as of"
-rePREVIOUS_BALANCE_DATE = re.compile("Previous balance as of (\d\d/\d\d/\d\d\d\d)")
-
-START_OF_TRANSACTION_DETAILS: str = "Transaction details"
-TYPE_OF_TRANSACTIONS: str = "TYPE_OF_TRANSACTIONS (this string does not occur in the file itself)"
-END_OF_TRANSACTION_DETAILS:str = "(Continued on next page)"
-
-START_OF_PAYMENTS: str = "Payments"
-START_OF_PAYMENTS_TABLE: str = "Reference #"
-PAYMENTS: str = "Reading payment lines (this string does not occur in the file itself)"
-
-START_OF_PURCHASES: str = "Purchases and other debits"
-PURCHASES: str = "Reading purchase lines (this string does not occur in the file itself)"
-
-FINISHED: str = "Total fees charged this period"
+@define
+class Transaction:
+    date: Any = None
+    reference_num: str = ""
+    description: str = ""
+    amount: Decimal = 0
 
 
 @define
@@ -51,13 +41,6 @@ class States:
         # From: https://docs.python.org/3/library/stdtypes.html?highlight=list%20index
         self.current_state = self.possible_states.index(newState)
 
-@define
-class Transaction:
-    date: Any = None
-    reference_num: str = ""
-    description: str = ""
-    amount: Decimal = 0
-
 
 DATE: str = 'date'
 reDateOfTransaction = re.compile("(\d\d/\d\d)")
@@ -65,10 +48,11 @@ REF: str = 'ref'
 DESC: str = 'desc'
 AMT: str = 'amt'
 
+
 @define
 class ReadingLineStates(States):
-    cur_xact: Transaction   # We'll reset to a new object a lot
-    previous_date: date     # So remember when the last transaction was separate from cur_xact
+    cur_xact: Transaction  # We'll reset to a new object a lot
+    previous_date: date  # So remember when the last transaction was separate from cur_xact
 
     def __init__(self):
         super().__init__([DATE, REF, DESC, AMT, FINISHED])
@@ -95,23 +79,19 @@ class ReadingLineStates(States):
                 xact_date = datetime.strptime(line + "/" + str(xact_year), "%m/%d/%Y").date()
 
                 # if the previous date is in last Dec & the current date is in January:
-                if  self.previous_date is not None and \
+                if self.previous_date is not None and \
                         self.previous_date.month == 12 and xact_date.month == 1:
                     xact_date = date(xact_date.year + 1, xact_date.month, xact_date.day)
 
                 # If the first date we're seeing is in January but the prior balance
                 # date is in Dec the move the year up
-                if  self.previous_date is None and \
+                if self.previous_date is None and \
                         xact_date < previous_balance_date:
                     xact_date = date(xact_date.year + 1, xact_date.month, xact_date.day)
 
                 self.cur_xact.date = xact_date
                 self.previous_date = xact_date
                 self.setCurrentState(REF)
-
-                # else:
-                #     print(
-                #         "Found a date, but it looks weird compared to the previous\n\tprev: " + self.previous_date + "\n\t new: " + xact_date)
 
         elif self.getCurrentState() == REF:
             self.cur_xact.reference_num = line
@@ -132,108 +112,161 @@ class ReadingLineStates(States):
 
         return self.getCurrentState()
 
-class ProgramStates(States):
 
+PREVIOUS_BALANCE_DATE: str = "Previous balance as of"
+rePREVIOUS_BALANCE_DATE = re.compile("Previous balance as of (\d\d/\d\d/\d\d\d\d)")
+
+START_OF_TRANSACTION_DETAILS: str = "Transaction details"
+TYPE_OF_TRANSACTIONS: str = "TYPE_OF_TRANSACTIONS (this string does not occur in the file itself)"
+END_OF_TRANSACTION_DETAILS: str = "(Continued on next page)"
+
+START_OF_PAYMENTS: str = "Payments"
+PAYMENTS: str = "Reading payment lines (this string does not occur in the file itself)"
+
+START_OF_OTHER_CREDITS: str = "Other credits"
+OTHER_CREDITS: str = "Reading Other credits lines (this string does not occur in the file itself)"
+
+START_OF_PURCHASES: str = "Purchases and other debits"
+PURCHASES: str = "Reading purchase lines (this string does not occur in the file itself)"
+
+FINISHED: str = "Total fees charged this period"
+
+
+class ProgramStates(States):
     def __init__(self):
         super().__init__([PREVIOUS_BALANCE_DATE, \
-                              START_OF_TRANSACTION_DETAILS, \
-                              TYPE_OF_TRANSACTIONS, \
-                              START_OF_PAYMENTS, START_OF_PAYMENTS_TABLE, \
-                              PAYMENTS, \
-                              START_OF_PURCHASES, \
-                              PURCHASES, \
-                              END_OF_TRANSACTION_DETAILS, \
-                              FINISHED])
+                          START_OF_TRANSACTION_DETAILS, \
+                          TYPE_OF_TRANSACTIONS, \
+                          # START_OF_PAYMENTS, \
+                          PAYMENTS, \
+                          # START_OF_OTHER_CREDITS, \
+                          OTHER_CREDITS, \
+                          # START_OF_PURCHASES, \
+                          PURCHASES, \
+                          END_OF_TRANSACTION_DETAILS, \
+                          FINISHED])
+
+
+NO_TRANSACTIONS_YET: str = "Haven't seen any transactions yet (this string does not occur in the file itself)"
+
 
 class TransactionStates(States):
-
     def __init__(self):
-        super().__init__([NO_XACTS_YET, \
-                            PAYMENTS, \
-                            PURCHASES])
+        super().__init__([NO_TRANSACTIONS_YET, \
+                          PAYMENTS, \
+                          OTHER_CREDITS, \
+                          PURCHASES])
+
 
 previous_balance_date: date = None
-all_purchases: [Transaction] = []
-all_payments: [Transaction] = []
-current_state = ProgramStates()
-NO_XACTS_YET:str = "Haven't seen any transactions yet (this string does not occur in the file itself)"
+program_state = ProgramStates()
 current_xact_type = TransactionStates()
 line_reader = ReadingLineStates()
+continue_searching = True  # to break out of nested loops
+
+all_payments: [Transaction] = []
+all_other_credits: [Transaction] = []
+all_purchases: [Transaction] = []
 
 fd = open(file_to_parse, "rb")
 viewer = SimplePDFViewer(fd)
 
-# print(viewer.metadata)
-
-continue_searching = True # to break out of nested loops
 for canvas in viewer:
     # page_text = canvas.text_content # text_content has lots of extra info & formatting, etc
-    page_strings = canvas.strings # this is a list of the actual text that we want to process
-    # print(page_strings)
+    page_strings = canvas.strings  # this is a list of the actual text that we want to process
 
     for line in page_strings:
-        print("\t\tline: " + line)
+        # print("\t\tline: " + line)
 
-        if current_state.getCurrentState() == PREVIOUS_BALANCE_DATE:
+        if program_state.getCurrentState() == PREVIOUS_BALANCE_DATE:
             match = re.search(rePREVIOUS_BALANCE_DATE, line)
             if match:
                 previous_balance_date = datetime.strptime(match.group(1), "%m/%d/%Y").date()
-                print("previous_balance_date: " + str(previous_balance_date) + " <= This is the starting year =================")
-                current_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
+               # print("previous_balance_date: " + str(previous_balance_date) + " <= This is the starting year =================")
+                program_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
 
-        elif current_state.getCurrentState() == START_OF_TRANSACTION_DETAILS:
+        elif program_state.getCurrentState() == START_OF_TRANSACTION_DETAILS:
             if START_OF_TRANSACTION_DETAILS in line:
-                print("FOUND TRANSACTION DETAILS!!!!! ===================================================")
+                # print("FOUND TRANSACTION DETAILS!!!!! ===================================================")
 
-                if current_xact_type.getCurrentState() == NO_XACTS_YET:
-                    current_state.setCurrentState(TYPE_OF_TRANSACTIONS)
-                else: # otherwise keep looking for whatever sort of xact we've most recently seen:
-                    current_state.setCurrentState(current_xact_type.getCurrentState())
+                if current_xact_type.getCurrentState() == NO_TRANSACTIONS_YET:
+                    program_state.setCurrentState(TYPE_OF_TRANSACTIONS)
+                else:  # otherwise keep looking for whatever sort of xact we've most recently seen:
+                    program_state.setCurrentState(current_xact_type.getCurrentState())
 
-        elif current_state.getCurrentState() == TYPE_OF_TRANSACTIONS:
+        elif program_state.getCurrentState() == TYPE_OF_TRANSACTIONS:
             if START_OF_PAYMENTS in line:
-                print("FOUND PAYMENTS!!!!! ===================================================")
-                current_state.setCurrentState(PAYMENTS)
+                # print("  PAYMENTS!!!!! ===================================================")
+                program_state.setCurrentState(PAYMENTS)
                 current_xact_type.setCurrentState(PAYMENTS)
                 line_reader = ReadingLineStates()
 
+            elif START_OF_OTHER_CREDITS in line:
+                # print("FOUND OTHER CREDITS!!!!! ===================================================")
+                program_state.setCurrentState(OTHER_CREDITS)
+                current_xact_type.setCurrentState(OTHER_CREDITS)
+                line_reader = ReadingLineStates()
+
             elif START_OF_PURCHASES in line:
-                print("FOUND START_OF_PURCHASES !!!!! ===================================================")
-                current_state.setCurrentState(START_OF_PURCHASES)
+                # print("FOUND START_OF_PURCHASES !!!!! ===================================================")
+                program_state.setCurrentState(PURCHASES)
                 current_xact_type.setCurrentState(PURCHASES)
                 line_reader = ReadingLineStates()
 
             elif END_OF_TRANSACTION_DETAILS in line:
-                current_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
-                print("END OF TRANSACTION DETAILS ==========================================================")
-                line_reader.reset() # dump any partial info
+                program_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
+                # print("END OF TRANSACTION DETAILS ==========================================================")
+                line_reader.reset()  # dump any partial info
 
-        elif current_state.getCurrentState() == PAYMENTS:
+        elif program_state.getCurrentState() == PAYMENTS:
             if START_OF_PURCHASES in line:
-                current_state.setCurrentState(PURCHASES)
+                program_state.setCurrentState(PURCHASES)
                 current_xact_type.setCurrentState(PURCHASES)
-                print("END OF PAYMENTS, START OF PURCHASES!!!! ============================================================")
+                # print("END OF PAYMENTS, START OF PURCHASES!!!! =========================================================")
+                line_reader = ReadingLineStates()
+
+            elif START_OF_OTHER_CREDITS in line:
+                program_state.setCurrentState(OTHER_CREDITS)
+                current_xact_type.setCurrentState(OTHER_CREDITS)
+                # print( "END OF PAYMENTS, START OF OTHER_CREDITS!!!! =====================================================")
                 line_reader = ReadingLineStates()
 
             elif END_OF_TRANSACTION_DETAILS in line:
-                current_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
-                print("END OF TRANSACTION DETAILS ==========================================================")
-                line_reader.reset() # dump any partial info
+                program_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
+                # print("END OF TRANSACTION DETAILS ==========================================================")
+                line_reader.reset()  # dump any partial info
 
             elif line_reader.processLine(line) == FINISHED:
                 all_payments.append(line_reader.cur_xact)
                 line_reader.reset()
 
-        elif current_state.getCurrentState() == PURCHASES:
+        elif program_state.getCurrentState() == OTHER_CREDITS:
+            if START_OF_PURCHASES in line:
+                program_state.setCurrentState(PURCHASES)
+                current_xact_type.setCurrentState(PURCHASES)
+                # print( "END OF OTHER_CREDITS, START OF PURCHASES!!!! =========================================================")
+                line_reader = ReadingLineStates()
+
+            elif END_OF_TRANSACTION_DETAILS in line:
+                program_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
+                # print("END OF TRANSACTION DETAILS ==========================================================")
+                line_reader.reset()  # dump any partial info
+
+            elif line_reader.processLine(line) == FINISHED:
+                all_other_credits.append(line_reader.cur_xact)
+                line_reader.reset()
+
+
+        elif program_state.getCurrentState() == PURCHASES:
             # If we see the 'end of purchases' marker then go directly to the FINISHED state
             if FINISHED in line:
-                current_state.setCurrentState(FINISHED)
-                print("END OF TRANSACTIONS!!!! ============================================================")
+                program_state.setCurrentState(FINISHED)
+                # print("END OF TRANSACTIONS!!!! ============================================================")
             elif line_reader.processLine(line) == FINISHED:
-                    all_purchases.append(line_reader.cur_xact)
-                    line_reader.reset()
+                all_purchases.append(line_reader.cur_xact)
+                line_reader.reset()
 
-        elif current_state.getCurrentState() == FINISHED:
+        elif program_state.getCurrentState() == FINISHED:
             continue_searching = False
             break
 
@@ -244,23 +277,22 @@ for canvas in viewer:
     if continue_searching is False:
         break
 
-print("\n================================================\n")
+print(" ")
 
-total = Decimal(0)
-for p in all_payments:
-    print(p)
-    total = total + p.amount
-print("\nFound a total of " + str(len(all_payments)) + " purchases")
-print("Total payments: " + str(total))
+def print_xacts(xacts: [Transaction], name: str):
+    total = Decimal(0)
+    for p in xacts:
+        print(p)
+        total = total + p.amount
 
+    print("\tFound a total of " + str(len(xacts)) + " " + name)
+    print("\tTotal cost: " + str(total))
+    print("")
 
-total = Decimal(0)
-for p in all_purchases:
-    print(p)
-    total = total + p.amount
+print_xacts(all_payments, "payments")
+print_xacts(all_other_credits, "other credits")
+print_xacts(all_purchases, "purchases")
 
-print("\nFound a total of " + str(len(all_purchases)) + " purchases")
-print("Total cost: " + str(total))
 
 
 # from PyPDF2 import PdfReader
