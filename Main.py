@@ -1,19 +1,20 @@
-# TODO: Determine current year - Start with previous balance due, as we work our way forwards: if month changes and it went from 12 to 1 then increase year (always update the date)
-# TODO: Determine current year - start with 'payment due date' and then work backwards (processing the produced list)?
-# TODO: convert first field into date object
+# Make sure the KMyMoney can make use of .csv
+# Refactor into argparse'd main
 
-
+import csv
 import re
 from datetime import date, datetime
 from decimal import *
+from operator import attrgetter
 from typing import Any
+
 
 from attrs import define
 from pdfreader import SimplePDFViewer
 
 # file_to_parse = """C:\MikesStuff\Pers\Dropbox\Personal\Finance, Insurance, Etc\Downloads\Venmo\\05-19-2022.pdf"""
 file_to_parse = """C:\MikesStuff\Pers\Dropbox\Personal\Finance, Insurance, Etc\Downloads\Venmo\\01-19-2022.pdf"""
-
+output_file = """C:\MikesStuff\Pers\Dropbox\Personal\Finance, Insurance, Etc\Downloads\Venmo\\01-19-2022.csv"""
 
 @define
 class Transaction:
@@ -21,6 +22,17 @@ class Transaction:
     reference_num: str = ""
     description: str = ""
     amount: Decimal = 0
+
+    @classmethod
+    def get_csv_header(self):
+        return ["Date", "Reference Num", "Description", "Amount"]
+
+    # Make the transaction iterable
+    # so that csv.writer can print it to a file
+    def __iter__(self):
+        for each in self.__slots__:
+            if not each.startswith('__'):
+                yield getattr(self, each, None)
 
 
 @define
@@ -289,10 +301,25 @@ def print_xacts(xacts: [Transaction], name: str):
     print("\tTotal cost: " + str(total))
     print("")
 
-print_xacts(all_payments, "payments")
-print_xacts(all_other_credits, "other credits")
-print_xacts(all_purchases, "purchases")
+# print_xacts(all_payments, "payments")
+# print_xacts(all_other_credits, "other credits")
+# print_xacts(all_purchases, "purchases")
 
+#  Make payments & credits negative, leave purchases positive
+all_xacts =  [Transaction( xact.date, xact.reference_num, xact.description, -1*xact.amount) for xact in all_payments + all_other_credits ] \
+            + all_purchases
+
+all_xacts.sort(key=attrgetter('date'))
+
+print_xacts(all_xacts, "ALL TRANSACTIONS")
+
+
+with open(output_file, 'w', newline='') as csvfile:
+    csv_writer = csv.writer(csvfile)
+    csv_writer.writerow(Transaction.get_csv_header())
+    csv_writer.writerows(all_xacts)
+
+print("Wrote all transactions to\n\t"+output_file)
 
 
 # from PyPDF2 import PdfReader
