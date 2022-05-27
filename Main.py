@@ -12,10 +12,6 @@ from typing import Any
 from attrs import define
 from pdfreader import SimplePDFViewer
 
-# file_to_parse = """C:\MikesStuff\Pers\Dropbox\Personal\Finance, Insurance, Etc\Downloads\Venmo\\05-19-2022.pdf"""
-file_to_parse = """C:\MikesStuff\Pers\Dropbox\Personal\Finance, Insurance, Etc\Downloads\Venmo\\01-19-2022.pdf"""
-output_file = """C:\MikesStuff\Pers\Dropbox\Personal\Finance, Insurance, Etc\Downloads\Venmo\\01-19-2022.csv"""
-
 @define
 class Transaction:
     date: Any = None
@@ -171,155 +167,150 @@ class TransactionStates(States):
 
 
 previous_balance_date: date = None
-program_state = ProgramStates()
-current_xact_type = TransactionStates()
-line_reader = ReadingLineStates()
-continue_searching = True  # to break out of nested loops
 
-all_payments: [Transaction] = []
-all_other_credits: [Transaction] = []
-all_purchases: [Transaction] = []
+def ConvertVenmoStatement(file_to_parse: str, output_file: str):
+    global previous_balance_date
+    previous_balance_date = None
+    program_state = ProgramStates()
+    current_xact_type = TransactionStates()
+    line_reader = ReadingLineStates()
+    continue_searching = True  # to break out of nested loops
+    all_payments: [Transaction] = []
+    all_other_credits: [Transaction] = []
+    all_purchases: [Transaction] = []
+    fd = open(file_to_parse, "rb")
+    viewer = SimplePDFViewer(fd)
+    for canvas in viewer:
+        # page_text = canvas.text_content # text_content has lots of extra info & formatting, etc
+        page_strings = canvas.strings  # this is a list of the actual text that we want to process
 
-fd = open(file_to_parse, "rb")
-viewer = SimplePDFViewer(fd)
+        for line in page_strings:
+            # print("\t\tline: " + line)
 
-for canvas in viewer:
-    # page_text = canvas.text_content # text_content has lots of extra info & formatting, etc
-    page_strings = canvas.strings  # this is a list of the actual text that we want to process
+            if program_state.getCurrentState() == PREVIOUS_BALANCE_DATE:
+                match = re.search(rePREVIOUS_BALANCE_DATE, line)
+                if match:
+                    previous_balance_date = datetime.strptime(match.group(1), "%m/%d/%Y").date()
+                    # print("previous_balance_date: " + str(previous_balance_date) + " <= This is the starting year =================")
+                    program_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
 
-    for line in page_strings:
-        # print("\t\tline: " + line)
+            elif program_state.getCurrentState() == START_OF_TRANSACTION_DETAILS:
+                if START_OF_TRANSACTION_DETAILS in line:
+                    # print("FOUND TRANSACTION DETAILS!!!!! ===================================================")
 
-        if program_state.getCurrentState() == PREVIOUS_BALANCE_DATE:
-            match = re.search(rePREVIOUS_BALANCE_DATE, line)
-            if match:
-                previous_balance_date = datetime.strptime(match.group(1), "%m/%d/%Y").date()
-               # print("previous_balance_date: " + str(previous_balance_date) + " <= This is the starting year =================")
-                program_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
+                    if current_xact_type.getCurrentState() == NO_TRANSACTIONS_YET:
+                        program_state.setCurrentState(TYPE_OF_TRANSACTIONS)
+                    else:  # otherwise keep looking for whatever sort of xact we've most recently seen:
+                        program_state.setCurrentState(current_xact_type.getCurrentState())
 
-        elif program_state.getCurrentState() == START_OF_TRANSACTION_DETAILS:
-            if START_OF_TRANSACTION_DETAILS in line:
-                # print("FOUND TRANSACTION DETAILS!!!!! ===================================================")
+            elif program_state.getCurrentState() == TYPE_OF_TRANSACTIONS:
+                if START_OF_PAYMENTS in line:
+                    # print("  PAYMENTS!!!!! ===================================================")
+                    program_state.setCurrentState(PAYMENTS)
+                    current_xact_type.setCurrentState(PAYMENTS)
+                    line_reader = ReadingLineStates()
 
-                if current_xact_type.getCurrentState() == NO_TRANSACTIONS_YET:
-                    program_state.setCurrentState(TYPE_OF_TRANSACTIONS)
-                else:  # otherwise keep looking for whatever sort of xact we've most recently seen:
-                    program_state.setCurrentState(current_xact_type.getCurrentState())
+                elif START_OF_OTHER_CREDITS in line:
+                    # print("FOUND OTHER CREDITS!!!!! ===================================================")
+                    program_state.setCurrentState(OTHER_CREDITS)
+                    current_xact_type.setCurrentState(OTHER_CREDITS)
+                    line_reader = ReadingLineStates()
 
-        elif program_state.getCurrentState() == TYPE_OF_TRANSACTIONS:
-            if START_OF_PAYMENTS in line:
-                # print("  PAYMENTS!!!!! ===================================================")
-                program_state.setCurrentState(PAYMENTS)
-                current_xact_type.setCurrentState(PAYMENTS)
-                line_reader = ReadingLineStates()
+                elif START_OF_PURCHASES in line:
+                    # print("FOUND START_OF_PURCHASES !!!!! ===================================================")
+                    program_state.setCurrentState(PURCHASES)
+                    current_xact_type.setCurrentState(PURCHASES)
+                    line_reader = ReadingLineStates()
 
-            elif START_OF_OTHER_CREDITS in line:
-                # print("FOUND OTHER CREDITS!!!!! ===================================================")
-                program_state.setCurrentState(OTHER_CREDITS)
-                current_xact_type.setCurrentState(OTHER_CREDITS)
-                line_reader = ReadingLineStates()
+                elif END_OF_TRANSACTION_DETAILS in line:
+                    program_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
+                    # print("END OF TRANSACTION DETAILS ==========================================================")
+                    line_reader.reset()  # dump any partial info
 
-            elif START_OF_PURCHASES in line:
-                # print("FOUND START_OF_PURCHASES !!!!! ===================================================")
-                program_state.setCurrentState(PURCHASES)
-                current_xact_type.setCurrentState(PURCHASES)
-                line_reader = ReadingLineStates()
+            elif program_state.getCurrentState() == PAYMENTS:
+                if START_OF_PURCHASES in line:
+                    program_state.setCurrentState(PURCHASES)
+                    current_xact_type.setCurrentState(PURCHASES)
+                    # print("END OF PAYMENTS, START OF PURCHASES!!!! =========================================================")
+                    line_reader = ReadingLineStates()
 
-            elif END_OF_TRANSACTION_DETAILS in line:
-                program_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
-                # print("END OF TRANSACTION DETAILS ==========================================================")
-                line_reader.reset()  # dump any partial info
+                elif START_OF_OTHER_CREDITS in line:
+                    program_state.setCurrentState(OTHER_CREDITS)
+                    current_xact_type.setCurrentState(OTHER_CREDITS)
+                    # print( "END OF PAYMENTS, START OF OTHER_CREDITS!!!! =====================================================")
+                    line_reader = ReadingLineStates()
 
-        elif program_state.getCurrentState() == PAYMENTS:
-            if START_OF_PURCHASES in line:
-                program_state.setCurrentState(PURCHASES)
-                current_xact_type.setCurrentState(PURCHASES)
-                # print("END OF PAYMENTS, START OF PURCHASES!!!! =========================================================")
-                line_reader = ReadingLineStates()
+                elif END_OF_TRANSACTION_DETAILS in line:
+                    program_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
+                    # print("END OF TRANSACTION DETAILS ==========================================================")
+                    line_reader.reset()  # dump any partial info
 
-            elif START_OF_OTHER_CREDITS in line:
-                program_state.setCurrentState(OTHER_CREDITS)
-                current_xact_type.setCurrentState(OTHER_CREDITS)
-                # print( "END OF PAYMENTS, START OF OTHER_CREDITS!!!! =====================================================")
-                line_reader = ReadingLineStates()
+                elif line_reader.processLine(line) == FINISHED:
+                    all_payments.append(line_reader.cur_xact)
+                    line_reader.reset()
 
-            elif END_OF_TRANSACTION_DETAILS in line:
-                program_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
-                # print("END OF TRANSACTION DETAILS ==========================================================")
-                line_reader.reset()  # dump any partial info
+            elif program_state.getCurrentState() == OTHER_CREDITS:
+                if START_OF_PURCHASES in line:
+                    program_state.setCurrentState(PURCHASES)
+                    current_xact_type.setCurrentState(PURCHASES)
+                    # print( "END OF OTHER_CREDITS, START OF PURCHASES!!!! =========================================================")
+                    line_reader = ReadingLineStates()
 
-            elif line_reader.processLine(line) == FINISHED:
-                all_payments.append(line_reader.cur_xact)
-                line_reader.reset()
+                elif END_OF_TRANSACTION_DETAILS in line:
+                    program_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
+                    # print("END OF TRANSACTION DETAILS ==========================================================")
+                    line_reader.reset()  # dump any partial info
 
-        elif program_state.getCurrentState() == OTHER_CREDITS:
-            if START_OF_PURCHASES in line:
-                program_state.setCurrentState(PURCHASES)
-                current_xact_type.setCurrentState(PURCHASES)
-                # print( "END OF OTHER_CREDITS, START OF PURCHASES!!!! =========================================================")
-                line_reader = ReadingLineStates()
-
-            elif END_OF_TRANSACTION_DETAILS in line:
-                program_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
-                # print("END OF TRANSACTION DETAILS ==========================================================")
-                line_reader.reset()  # dump any partial info
-
-            elif line_reader.processLine(line) == FINISHED:
-                all_other_credits.append(line_reader.cur_xact)
-                line_reader.reset()
+                elif line_reader.processLine(line) == FINISHED:
+                    all_other_credits.append(line_reader.cur_xact)
+                    line_reader.reset()
 
 
-        elif program_state.getCurrentState() == PURCHASES:
-            # If we see the 'end of purchases' marker then go directly to the FINISHED state
-            if FINISHED in line:
-                program_state.setCurrentState(FINISHED)
-                # print("END OF TRANSACTIONS!!!! ============================================================")
-            elif line_reader.processLine(line) == FINISHED:
-                all_purchases.append(line_reader.cur_xact)
-                line_reader.reset()
+            elif program_state.getCurrentState() == PURCHASES:
+                # If we see the 'end of purchases' marker then go directly to the FINISHED state
+                if FINISHED in line:
+                    program_state.setCurrentState(FINISHED)
+                    # print("END OF TRANSACTIONS!!!! ============================================================")
+                elif line_reader.processLine(line) == FINISHED:
+                    all_purchases.append(line_reader.cur_xact)
+                    line_reader.reset()
 
-        elif program_state.getCurrentState() == FINISHED:
-            continue_searching = False
+            elif program_state.getCurrentState() == FINISHED:
+                continue_searching = False
+                break
+
+            else:
+                print("ERROR!! Unknown State!")
+                exit(-1)
+
+        if continue_searching is False:
             break
+    print(" ")
 
-        else:
-            print("ERROR!! Unknown State!")
-            exit(-1)
+    def print_xacts(xacts: [Transaction], name: str):
+        total = Decimal(0)
+        for p in xacts:
+            print(p)
+            total = total + p.amount
 
-    if continue_searching is False:
-        break
+        print("\tFound a total of " + str(len(xacts)) + " " + name)
+        print("\tTotal cost: " + str(total))
+        print("")
 
-print(" ")
-
-def print_xacts(xacts: [Transaction], name: str):
-    total = Decimal(0)
-    for p in xacts:
-        print(p)
-        total = total + p.amount
-
-    print("\tFound a total of " + str(len(xacts)) + " " + name)
-    print("\tTotal cost: " + str(total))
-    print("")
-
-# print_xacts(all_payments, "payments")
-# print_xacts(all_other_credits, "other credits")
-# print_xacts(all_purchases, "purchases")
-
-#  Make payments & credits negative, leave purchases positive
-all_xacts =  [Transaction( xact.date, xact.reference_num, xact.description, -1*xact.amount) for xact in all_payments + all_other_credits ] \
-            + all_purchases
-
-all_xacts.sort(key=attrgetter('date'))
-
-print_xacts(all_xacts, "ALL TRANSACTIONS")
-
-
-with open(output_file, 'w', newline='') as csvfile:
-    csv_writer = csv.writer(csvfile)
-    csv_writer.writerow(Transaction.get_csv_header())
-    csv_writer.writerows(all_xacts)
-
-print("Wrote all transactions to\n\t"+output_file)
+    # print_xacts(all_payments, "payments")
+    # print_xacts(all_other_credits, "other credits")
+    # print_xacts(all_purchases, "purchases")
+    #  Make payments & credits negative, leave purchases positive
+    all_xacts = [Transaction(xact.date, xact.reference_num, xact.description, -1 * xact.amount) for xact in
+                 all_payments + all_other_credits] \
+                + all_purchases
+    all_xacts.sort(key=attrgetter('date'))
+    print_xacts(all_xacts, "ALL TRANSACTIONS")
+    with open(output_file, 'w', newline='') as csvfile:
+        csv_writer = csv.writer(csvfile)
+        csv_writer.writerow(Transaction.get_csv_header())
+        csv_writer.writerows(all_xacts)
+    print("Wrote all transactions to\n\t" + output_file)
 
 
 # from PyPDF2 import PdfReader
@@ -1046,5 +1037,9 @@ print("Wrote all transactions to\n\t"+output_file)
 #
 #
 #
-# if __name__ == "__main__":
-#     CLI()
+if __name__ == "__main__":
+    # file_to_parse = """C:\MikesStuff\Pers\Dropbox\Personal\Finance, Insurance, Etc\Downloads\Venmo\\05-19-2022.pdf"""
+    file_to_parse = """C:\MikesStuff\Pers\Dropbox\Personal\Finance, Insurance, Etc\Downloads\Venmo\\02-16-2022.pdf"""
+    output_file = """C:\MikesStuff\Pers\Dropbox\Personal\Finance, Insurance, Etc\Downloads\Venmo\\02-16-2022.csv"""
+    ConvertVenmoStatement(file_to_parse, output_file)
+    # CLI()
