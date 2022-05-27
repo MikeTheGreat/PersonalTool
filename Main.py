@@ -8,24 +8,24 @@
 #
 # '''
 ### TODO LIST ##########################################################################################################
-# Refactor into argparse'd main
 
 
 import argparse
-import datetime
 import os
 import sys
 
 from colorama import init
 init()
 
-# import stackprinter
-# stackprinter.set_excepthook(style='darkbg2')
-#
-# # from icecream import install
-# # install()
+import stackprinter
+stackprinter.set_excepthook(style='darkbg2')
 
 from finance.venmo import ConvertVenmoStatement
+
+# Utility for print()ing debug info:
+# https://github.com/gruns/icecream
+# # from icecream import install
+# # install()
 
 #region Functions to handle menu options
 def fnConvertVenmoToCSV(args):
