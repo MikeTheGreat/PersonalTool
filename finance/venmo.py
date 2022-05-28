@@ -1,4 +1,5 @@
 import csv
+from functools import reduce
 import re
 from datetime import date, datetime
 from decimal import *
@@ -294,17 +295,35 @@ def ConvertVenmoStatement(file_to_parse: str, output_file: str):
         print("\tTotal cost: " + str(total))
         print("")
 
-    # print_xacts(all_payments, "payments")
-    # print_xacts(all_other_credits, "other credits")
-    # print_xacts(all_purchases, "purchases")
+    ### Write transactions to the file
     #  Make payments & credits negative, leave purchases positive
     all_xacts = [Transaction(xact.date, xact.reference_num, xact.description, -1 * xact.amount) for xact in
                  all_payments + all_other_credits] \
                 + all_purchases
     all_xacts.sort(key=attrgetter('date'))
-    print_xacts(all_xacts, "ALL TRANSACTIONS")
+
     with open(output_file, 'w', newline='') as csvfile:
         csv_writer = csv.writer(csvfile)
         csv_writer.writerow(Transaction.get_csv_header())
         csv_writer.writerows(all_xacts)
+
+    ### Print summary of transactions
+    xact_adder = lambda x, y: Decimal(x + y.amount)
+
+    # print_xacts(all_xacts, "ALL TRANSACTIONS")
+
+    print("")
+
+    # print_xacts(all_payments, "payments")
+    total = reduce(xact_adder, all_payments, Decimal(0))
+    print("Sum of payments: " + str(total))
+
+    # print_xacts(all_other_credits, "other credits")
+    total = reduce(xact_adder, all_other_credits, Decimal(0))
+    print("Sum of other credits: " + str(total))
+
+    # print_xacts(all_purchases, "purchases")
+    total = reduce(xact_adder, all_purchases, Decimal(0))
+    print("Sum of purchases: " + str(total))
+
     print("Wrote all transactions to\n\t" + output_file)

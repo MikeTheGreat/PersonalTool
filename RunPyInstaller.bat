@@ -5,7 +5,7 @@
 
 echo ######################## Make the PersonalTool program ####################################
 
-REM set PYTHONOPTIMIZE=1 && venv_3-9_min\Scripts\pyinstaller.exe Main.py --onedir --clean --noconfirm
+set PYTHONOPTIMIZE=1 && venv_3-9_min\Scripts\pyinstaller.exe Main.py --onedir --clean --noconfirm
 
 echo .
 echo .

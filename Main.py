@@ -8,7 +8,7 @@
 #
 # '''
 ### T O D O      L I S T ###############################################################################################
-
+# TODO Venmo convert prints xacts to screen if verbose setting is on?
 
 import argparse
 import os
