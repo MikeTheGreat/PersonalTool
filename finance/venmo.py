@@ -92,7 +92,9 @@ class ReadingLineStates(States):
                 # If the first date we're seeing is in January but the prior balance
                 # date is in Dec the move the year up
                 if self.previous_date is None and \
-                        xact_date < previous_balance_date:
+                        xact_date < previous_balance_date \
+                        and previous_balance_date.month == 12 \
+                        and xact_date.month == 1:
                     xact_date = date(xact_date.year + 1, xact_date.month, xact_date.day)
 
                 self.cur_xact.date = xact_date
@@ -283,7 +285,7 @@ def ConvertVenmoStatement(file_to_parse: str, output_file: str):
 
         if continue_searching is False:
             break
-    print(" ")
+    # print(" ")
 
     def print_xacts(xacts: [Transaction], name: str):
         total = Decimal(0)
@@ -311,8 +313,7 @@ def ConvertVenmoStatement(file_to_parse: str, output_file: str):
     xact_adder = lambda x, y: Decimal(x + y.amount)
 
     # print_xacts(all_xacts, "ALL TRANSACTIONS")
-
-    print("")
+    # print("")
 
     # print_xacts(all_payments, "payments")
     total = reduce(xact_adder, all_payments, Decimal(0))
@@ -326,4 +327,4 @@ def ConvertVenmoStatement(file_to_parse: str, output_file: str):
     total = reduce(xact_adder, all_purchases, Decimal(0))
     print("Sum of purchases: " + str(total))
 
-    print("Wrote all transactions to\n\t" + output_file)
+    print("\nWrote all transactions to\n\t" + output_file)
