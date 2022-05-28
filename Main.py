@@ -8,7 +8,8 @@
 #
 # '''
 ### T O D O      L I S T ###############################################################################################
-# TODO Venmo convert prints xacts to screen if verbose setting is on?
+# TODO Venmo convert: prints xacts to screen if verbose setting is on?
+# TODO Venmo convert: 'account name' CLI arg to put at the top of the file?
 
 import argparse
 import os
