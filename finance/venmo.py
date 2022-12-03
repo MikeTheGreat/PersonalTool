@@ -1,4 +1,5 @@
 import csv
+from enum import Enum
 from functools import reduce
 import re
 from datetime import date, datetime
@@ -186,14 +187,6 @@ class ProgramStates(States):
                           FINISHED])
 
 
-class TransactionStates(States):
-    def __init__(self):
-        super().__init__([SEARCHING_FOR_TRANSACTION_TYPE, \
-                          PAYMENTS, \
-                          OTHER_CREDITS, \
-                          PURCHASES])
-
-
 previous_balance_date: date = None
 
 
@@ -201,7 +194,7 @@ def ConvertVenmoStatement(file_to_parse: str, output_file: str):
     global previous_balance_date
     previous_balance_date = None
     program_state = ProgramStates()
-    current_xact_type = TransactionStates()
+    current_xact_type = SEARCHING_FOR_TRANSACTION_TYPE
     line_reader = ReadingLineStates()
     line_reader.log_state_machine.setLevel(logging.WARN)
     continue_searching = True  # to break out of nested loops
@@ -228,28 +221,28 @@ def ConvertVenmoStatement(file_to_parse: str, output_file: str):
                 if SEARCHING_FOR_TRANSACTION_DETAILS in line:
                     # print("FOUND TRANSACTION DETAILS!!!!! ===================================================")
 
-                    if current_xact_type.getCurrentState() == SEARCHING_FOR_TRANSACTION_TYPE:
+                    if current_xact_type == SEARCHING_FOR_TRANSACTION_TYPE:
                         program_state.setCurrentState(SEARCHING_FOR_TRANSACTION_TYPE)
                     else:  # otherwise keep looking for whatever sort of xact we've most recently seen:
-                        program_state.setCurrentState(current_xact_type.getCurrentState())
+                        program_state.setCurrentState(current_xact_type)
 
             elif program_state.getCurrentState() == SEARCHING_FOR_TRANSACTION_TYPE:
                 if START_OF_PAYMENTS in line:
                     # print("  PAYMENTS!!!!! ===================================================")
                     program_state.setCurrentState(PAYMENTS)
-                    current_xact_type.setCurrentState(PAYMENTS)
+                    current_xact_type = PAYMENTS
                     line_reader = ReadingLineStates()
 
                 elif START_OF_OTHER_CREDITS in line:
                     # print("FOUND OTHER CREDITS!!!!! ===================================================")
                     program_state.setCurrentState(OTHER_CREDITS)
-                    current_xact_type.setCurrentState(OTHER_CREDITS)
+                    current_xact_type = OTHER_CREDITS
                     line_reader = ReadingLineStates()
 
                 elif START_OF_PURCHASES in line:
                     # print("FOUND START_OF_PURCHASES !!!!! ===================================================")
                     program_state.setCurrentState(PURCHASES)
-                    current_xact_type.setCurrentState(PURCHASES)
+                    current_xact_type = PURCHASES
                     line_reader = ReadingLineStates()
 
                 elif TRANSACTIONS_CONTINUED_LATER in line:
@@ -260,13 +253,13 @@ def ConvertVenmoStatement(file_to_parse: str, output_file: str):
             elif program_state.getCurrentState() == PAYMENTS:
                 if START_OF_PURCHASES in line:
                     program_state.setCurrentState(PURCHASES)
-                    current_xact_type.setCurrentState(PURCHASES)
+                    current_xact_type = PURCHASES
                     # print("END OF PAYMENTS, START OF PURCHASES!!!! =========================================================")
                     line_reader = ReadingLineStates()
 
                 elif START_OF_OTHER_CREDITS in line:
                     program_state.setCurrentState(OTHER_CREDITS)
-                    current_xact_type.setCurrentState(OTHER_CREDITS)
+                    current_xact_type = OTHER_CREDITS
                     # print( "END OF PAYMENTS, START OF OTHER_CREDITS!!!! =====================================================")
                     line_reader = ReadingLineStates()
 
@@ -282,7 +275,7 @@ def ConvertVenmoStatement(file_to_parse: str, output_file: str):
             elif program_state.getCurrentState() == OTHER_CREDITS:
                 if START_OF_PURCHASES in line:
                     program_state.setCurrentState(PURCHASES)
-                    current_xact_type.setCurrentState(PURCHASES)
+                    current_xact_type = PURCHASES
                     # print( "END OF OTHER_CREDITS, START OF PURCHASES!!!! =========================================================")
                     line_reader = ReadingLineStates()
 
