@@ -1,0 +1,10 @@
+attrs~=22.1.0
+stackprinter~=0.2.10
+colorama~=0.4.6
+pdfreader
+
+#wheel~=0.37.1
+#six~=1.16.0
+#python-dateutil~=2.8.2
+#Pillow~=9.3.0
+#pip~=22.3.1setuptools~=65.6.3

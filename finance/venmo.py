@@ -6,9 +6,26 @@ from decimal import *
 from operator import attrgetter
 from typing import Any
 
+import logging
+
+logging.basicConfig(format='%(levelname)s %(name)s - %(message)s')
+
+# This would add a _second_ console printer, but with our custom format:
+ch = logging.StreamHandler()
+ch.setLevel(logging.DEBUG)
+formatter = logging.Formatter('NEW FORMATTER %(name)s - %(levelname)s - %(message)s')
+ch.setFormatter(formatter)
+
+# add the handlers to the logger
+logger = logging.getLogger('PersonalTool')
+logger.setLevel(logging.DEBUG)
+
+logger_transactions = logging.getLogger('PersonalTool.venmo.transactions')
+# logger_transactions.setLevel(logging.DEBUG)
 
 from attrs import define
 from pdfreader import SimplePDFViewer
+
 
 @define
 class Transaction:
@@ -28,16 +45,23 @@ class Transaction:
             if not each.startswith('__'):
                 yield getattr(self, each, None)
 
+    def __str__(self):
+        return f'Transaction({self.amount},\t{self.reference_num},\t{self.description})'
+
 
 @define
 class States:
     # what are we looking for next?
     possible_states: [str]
     current_state: int
+    log_state_machine: Any
 
     def __init__(self, states):
         self.possible_states = states
         self.current_state = 0
+        log_name = "PersonalTool.Venmo.StateMachine" + "." + type(self).__name__
+        self.log_state_machine = logging.getLogger(log_name)
+        # self.log_state_machine.setLevel(logging.DEBUG)
 
     def getCurrentState(self):
         return self.possible_states[self.current_state]
@@ -46,6 +70,8 @@ class States:
         # index() "index raises ValueError when x is not found in s"
         # From: https://docs.python.org/3/library/stdtypes.html?highlight=list%20index
         self.current_state = self.possible_states.index(newState)
+        self.log_state_machine.info(
+            "State Machine changed state to " + str(self.current_state) + ": \"" + self.getCurrentState() + "\"")
 
 
 DATE: str = 'date'
@@ -113,6 +139,8 @@ class ReadingLineStates(States):
             value = Decimal(re.sub(r'[^\d.]', '', line))
             self.cur_xact.amount = value
 
+            logger_transactions.info("Found transaction: " + str(self.cur_xact))
+
             self.setCurrentState(FINISHED)
 
         elif self.getCurrentState() == FINISHED:
@@ -124,9 +152,12 @@ class ReadingLineStates(States):
 PREVIOUS_BALANCE_DATE: str = "Previous balance as of"
 rePREVIOUS_BALANCE_DATE = re.compile("Previous balance as of (\d\d/\d\d/\d\d\d\d)")
 
-START_OF_TRANSACTION_DETAILS: str = "Transaction details"
-TYPE_OF_TRANSACTIONS: str = "TYPE_OF_TRANSACTIONS (this string does not occur in the file itself)"
-END_OF_TRANSACTION_DETAILS: str = "(Continued on next page)"
+SEARCHING_FOR_TRANSACTION_DETAILS: str = "Transaction details"
+# We'll see the "Transaction Details" h2 header, then later in the table we'll see payment / purchase / etc h3 headers
+# So start off in "SEARCHING_FOR_TRANSACTION_TYPE"
+SEARCHING_FOR_TRANSACTION_TYPE: str = "Haven't found transactions type yet (this string does not occur in the file itself)"
+
+TRANSACTIONS_CONTINUED_LATER: str = "(Continued on next page)"
 
 START_OF_PAYMENTS: str = "Payments"
 PAYMENTS: str = "Reading payment lines (this string does not occur in the file itself)"
@@ -143,24 +174,21 @@ FINISHED: str = "Total fees charged this period"
 class ProgramStates(States):
     def __init__(self):
         super().__init__([PREVIOUS_BALANCE_DATE, \
-                          START_OF_TRANSACTION_DETAILS, \
-                          TYPE_OF_TRANSACTIONS, \
+                          SEARCHING_FOR_TRANSACTION_DETAILS, \
+                          SEARCHING_FOR_TRANSACTION_TYPE, \
                           # START_OF_PAYMENTS, \
                           PAYMENTS, \
                           # START_OF_OTHER_CREDITS, \
                           OTHER_CREDITS, \
                           # START_OF_PURCHASES, \
                           PURCHASES, \
-                          END_OF_TRANSACTION_DETAILS, \
+                          TRANSACTIONS_CONTINUED_LATER, \
                           FINISHED])
-
-
-NO_TRANSACTIONS_YET: str = "Haven't seen any transactions yet (this string does not occur in the file itself)"
 
 
 class TransactionStates(States):
     def __init__(self):
-        super().__init__([NO_TRANSACTIONS_YET, \
+        super().__init__([SEARCHING_FOR_TRANSACTION_TYPE, \
                           PAYMENTS, \
                           OTHER_CREDITS, \
                           PURCHASES])
@@ -168,12 +196,14 @@ class TransactionStates(States):
 
 previous_balance_date: date = None
 
+
 def ConvertVenmoStatement(file_to_parse: str, output_file: str):
     global previous_balance_date
     previous_balance_date = None
     program_state = ProgramStates()
     current_xact_type = TransactionStates()
     line_reader = ReadingLineStates()
+    line_reader.log_state_machine.setLevel(logging.WARN)
     continue_searching = True  # to break out of nested loops
     all_payments: [Transaction] = []
     all_other_credits: [Transaction] = []
@@ -192,18 +222,18 @@ def ConvertVenmoStatement(file_to_parse: str, output_file: str):
                 if match:
                     previous_balance_date = datetime.strptime(match.group(1), "%m/%d/%Y").date()
                     # print("previous_balance_date: " + str(previous_balance_date) + " <= This is the starting year =================")
-                    program_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
+                    program_state.setCurrentState(SEARCHING_FOR_TRANSACTION_DETAILS)
 
-            elif program_state.getCurrentState() == START_OF_TRANSACTION_DETAILS:
-                if START_OF_TRANSACTION_DETAILS in line:
+            elif program_state.getCurrentState() == SEARCHING_FOR_TRANSACTION_DETAILS:
+                if SEARCHING_FOR_TRANSACTION_DETAILS in line:
                     # print("FOUND TRANSACTION DETAILS!!!!! ===================================================")
 
-                    if current_xact_type.getCurrentState() == NO_TRANSACTIONS_YET:
-                        program_state.setCurrentState(TYPE_OF_TRANSACTIONS)
+                    if current_xact_type.getCurrentState() == SEARCHING_FOR_TRANSACTION_TYPE:
+                        program_state.setCurrentState(SEARCHING_FOR_TRANSACTION_TYPE)
                     else:  # otherwise keep looking for whatever sort of xact we've most recently seen:
                         program_state.setCurrentState(current_xact_type.getCurrentState())
 
-            elif program_state.getCurrentState() == TYPE_OF_TRANSACTIONS:
+            elif program_state.getCurrentState() == SEARCHING_FOR_TRANSACTION_TYPE:
                 if START_OF_PAYMENTS in line:
                     # print("  PAYMENTS!!!!! ===================================================")
                     program_state.setCurrentState(PAYMENTS)
@@ -222,8 +252,8 @@ def ConvertVenmoStatement(file_to_parse: str, output_file: str):
                     current_xact_type.setCurrentState(PURCHASES)
                     line_reader = ReadingLineStates()
 
-                elif END_OF_TRANSACTION_DETAILS in line:
-                    program_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
+                elif TRANSACTIONS_CONTINUED_LATER in line:
+                    program_state.setCurrentState(SEARCHING_FOR_TRANSACTION_DETAILS)
                     # print("END OF TRANSACTION DETAILS ==========================================================")
                     line_reader.reset()  # dump any partial info
 
@@ -240,8 +270,8 @@ def ConvertVenmoStatement(file_to_parse: str, output_file: str):
                     # print( "END OF PAYMENTS, START OF OTHER_CREDITS!!!! =====================================================")
                     line_reader = ReadingLineStates()
 
-                elif END_OF_TRANSACTION_DETAILS in line:
-                    program_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
+                elif TRANSACTIONS_CONTINUED_LATER in line:
+                    program_state.setCurrentState(SEARCHING_FOR_TRANSACTION_DETAILS)
                     # print("END OF TRANSACTION DETAILS ==========================================================")
                     line_reader.reset()  # dump any partial info
 
@@ -256,8 +286,8 @@ def ConvertVenmoStatement(file_to_parse: str, output_file: str):
                     # print( "END OF OTHER_CREDITS, START OF PURCHASES!!!! =========================================================")
                     line_reader = ReadingLineStates()
 
-                elif END_OF_TRANSACTION_DETAILS in line:
-                    program_state.setCurrentState(START_OF_TRANSACTION_DETAILS)
+                elif TRANSACTIONS_CONTINUED_LATER in line:
+                    program_state.setCurrentState(SEARCHING_FOR_TRANSACTION_DETAILS)
                     # print("END OF TRANSACTION DETAILS ==========================================================")
                     line_reader.reset()  # dump any partial info
 
@@ -271,6 +301,10 @@ def ConvertVenmoStatement(file_to_parse: str, output_file: str):
                 if FINISHED in line:
                     program_state.setCurrentState(FINISHED)
                     # print("END OF TRANSACTIONS!!!! ============================================================")
+                elif TRANSACTIONS_CONTINUED_LATER in line:
+                    program_state.setCurrentState(SEARCHING_FOR_TRANSACTION_DETAILS)
+                    # print("END OF TRANSACTION DETAILS ==========================================================")
+                    line_reader.reset()  # dump any partial info
                 elif line_reader.processLine(line) == FINISHED:
                     all_purchases.append(line_reader.cur_xact)
                     line_reader.reset()
@@ -285,6 +319,7 @@ def ConvertVenmoStatement(file_to_parse: str, output_file: str):
 
         if continue_searching is False:
             break
+
     # print(" ")
 
     def print_xacts(xacts: [Transaction], name: str):

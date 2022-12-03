@@ -10,6 +10,20 @@
 ### T O D O      L I S T ###############################################################################################
 # TODO Venmo convert: prints xacts to screen if verbose setting is on?
 # TODO Venmo convert: 'account name' CLI arg to put at the top of the file?
+#
+#
+#   As of 2022-12-02:
+#   pdfreader requires bitarray, which must be installed via wheel file
+#       AND
+#   The pre-built bitarray only works with python 3.10 (https://pypi.org/project/bitarray/#files)
+#
+#  TODO: Will need to install bitarray from a wheel (.whl) file b/c I can't build it from source
+#
+#       https://stackoverflow.com/questions/27885397/how-do-i-install-a-python-package-with-a-whl-file
+#       pip install filename.whl
+#
+#       Also, remember that pip debug --verbose will list all the tags that one can use for installing wheel
+#       files
 
 import argparse
 import os

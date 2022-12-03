@@ -4,8 +4,9 @@
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/venv_3-8_min" />
       <excludeFolder url="file://$MODULE_DIR$/venv_3-9_min" />
+      <excludeFolder url="file://$MODULE_DIR$/venv3_10" />
     </content>
-    <orderEntry type="jdk" jdkName="Python 3.9 (PersonalTool)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="Python 3.10 (PersonalTool)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
 </module>

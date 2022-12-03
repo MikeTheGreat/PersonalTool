@@ -1,6 +1,9 @@
 @REM Create a single executable on this OS (Windows, Mac, Linux)
 @REM
 
+SET DEST_DIR="C:\MIkesStuff\Pers\Dropbox\Personal\home\PersonalTool"
+echo "Generating PersonalTool and copying it into " $DEST_DIR
+
 @call venv_3-9_min\Scripts\activate.bat
 
 echo ######################## Make the PersonalTool program ####################################
@@ -16,19 +19,19 @@ echo .
 echo Replace existing PersonalTool with this new one:
 
 echo    Remove existing dir
-rmdir /s /q C:\MikesStuff\Pers\Dropbox\Work\bin\PersonalTool
+rmdir /s /q $DEST_DIR
 
 echo    Make replacement dir
-mkdir C:\MikesStuff\Pers\Dropbox\Work\bin\PersonalTool
+mkdir $DEST_DIR
 
 echo Rename Main.exe to be pt.exe
 ren dist\Main\Main.exe pt.exe
 
 echo    Move working stuff into final dir
-REM move dist/Main C:\MikesStuff\Pers\Dropbox\Work\bin\PersonalTool
-cp -t C:\MikesStuff\Pers\Dropbox\Work\bin\PersonalTool -r dist/Main/*
+REM move dist/Main $DEST_DIR
+cp -t $DEST_DIR -r dist/Main/*
 
-REM copy /Y dist\gt.exe C:\MikesStuff\Pers\Dropbox\Work\bin
+REM copy /Y dist\gt.exe $DEST_DIR
 
 
 timeout /t 30
