@@ -13,13 +13,13 @@ logging.basicConfig(format='%(levelname)s %(name)s - %(message)s')
 
 # This would add a _second_ console printer, but with our custom format:
 ch = logging.StreamHandler()
-ch.setLevel(logging.DEBUG)
+ch.setLevel(logging.ERROR)
 formatter = logging.Formatter('NEW FORMATTER %(name)s - %(levelname)s - %(message)s')
 ch.setFormatter(formatter)
 
 # add the handlers to the logger
 logger = logging.getLogger('PersonalTool')
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.ERROR)
 
 logger_transactions = logging.getLogger('PersonalTool.venmo.transactions')
 # logger_transactions.setLevel(logging.DEBUG)
@@ -62,7 +62,7 @@ class States:
         self.current_state = 0
         log_name = "PersonalTool.Venmo.StateMachine" + "." + type(self).__name__
         self.log_state_machine = logging.getLogger(log_name)
-        # self.log_state_machine.setLevel(logging.DEBUG)
+        self.log_state_machine.setLevel(logging.ERROR)
 
     def getCurrentState(self):
         return self.possible_states[self.current_state]
