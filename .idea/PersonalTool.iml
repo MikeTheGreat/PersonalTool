@@ -9,4 +9,7 @@
     <orderEntry type="jdk" jdkName="Python 3.10 (PersonalTool)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
+  <component name="PackageRequirementsSettings">
+    <option name="requirementsPath" value="requirements2.txt" />
+  </component>
 </module>

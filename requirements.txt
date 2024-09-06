@@ -1,7 +1,8 @@
 attrs~=22.1.0
 stackprinter~=0.2.10
 colorama~=0.4.6
-pdfreader
+pdfreader~=0.1.12
+pywin32
 
 #wheel~=0.37.1
 #six~=1.16.0
