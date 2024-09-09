@@ -1,3 +1,17 @@
+# Basic plan:
+# ConvertVenmoStatement is the entry point.
+# It creates a ProgramStates FSM
+# Initially we go looking for the 'previous statement date' to get the year to help us figure out if
+#       this statement spans years
+# Next we go looking for 'Transaction Details', which is where all the payments/credits/purchases are listed
+#   Within Transaction Details we look for the PAYMENTS, then the OTHER_CREDITS, then PURCHASES sections
+#   Each transaction listing can be interrupted by other stuff (identified via TRANSACTIONS_CONTINUED_LATER)
+#       If that occurs we remember the current category into ProgramStates.current_xact_type
+#   We then use the ReadingLineStates FSM to handle each chunk of a transaction
+#       The idea is that the outer (ProgramStates) FSM passes line chunks into the inner (ReadingLineStates) FSM
+#           until R.L.S has accumulated a full transaction
+#       After the full transaction has been accumulated the outer FSM adds that transaction to the right category
+
 import csv
 from enum import Enum
 from functools import reduce
@@ -7,26 +21,32 @@ from decimal import *
 from operator import attrgetter
 from typing import Any
 
-import logging
-
-logging.basicConfig(format='%(levelname)s %(name)s - %(message)s')
-
-# This would add a _second_ console printer, but with our custom format:
-ch = logging.StreamHandler()
-ch.setLevel(logging.ERROR)
-formatter = logging.Formatter('NEW FORMATTER %(name)s - %(levelname)s - %(message)s')
-ch.setFormatter(formatter)
-
-# add the handlers to the logger
-logger = logging.getLogger('PersonalTool')
-logger.setLevel(logging.ERROR)
-
-logger_transactions = logging.getLogger('PersonalTool.venmo.transactions')
-# logger_transactions.setLevel(logging.DEBUG)
-
 from attrs import define
 from pdfreader import SimplePDFViewer
+from transitions import Machine
 
+import logging
+
+# logging.basicConfig(format='%(levelname)s %(name)s - %(message)s')
+#
+# # This would add a _second_ console printer, but with our custom format:
+# ch = logging.StreamHandler()
+# ch.setLevel(logging.ERROR)
+# formatter = logging.Formatter('NEW FORMATTER %(name)s - %(levelname)s - %(message)s')
+# ch.setFormatter(formatter)
+#
+# # add the handlers to the logger
+# logger = logging.getLogger('PersonalTool')
+# logger.setLevel(logging.ERROR)
+#
+# logger_transactions = logging.getLogger('PersonalTool.venmo.transactions')
+# logger_transactions.setLevel(logging.DEBUG)
+
+logging.basicConfig(level=logging.INFO)
+# Set transitions' log level to INFO; DEBUG messages will be omitted
+logging.getLogger('transitions').setLevel(logging.INFO)
+
+previous_balance_date: date = None
 
 @define
 class Transaction:
@@ -88,7 +108,7 @@ class ReadingLineStates(States):
     previous_date: date  # So remember when the last transaction was separate from cur_xact
 
     def __init__(self):
-        super().__init__([DATE, REF, DESC, AMT, FINISHED])
+        super().__init__([DATE, REF, DESC, AMT, TransactionStates.FINISHED.name])
         self.previous_date = None
         self.reset()
 
@@ -140,180 +160,199 @@ class ReadingLineStates(States):
             value = Decimal(re.sub(r'[^\d.]', '', line))
             self.cur_xact.amount = value
 
-            logger_transactions.info("Found transaction: " + str(self.cur_xact))
+            print("Found transaction: " + str(self.cur_xact))
 
-            self.setCurrentState(FINISHED)
+            self.setCurrentState(TransactionStates.FINISHED.name)
 
-        elif self.getCurrentState() == FINISHED:
+        elif self.getCurrentState() == TransactionStates.FINISHED.name:
             pass
 
         return self.getCurrentState()
 
 
-PREVIOUS_BALANCE_DATE: str = "Previous balance as of"
 rePREVIOUS_BALANCE_DATE = re.compile("Previous balance as of (\d\d/\d\d/\d\d\d\d)")
+class TransactionStates(Enum):
+    PREVIOUS_BALANCE_DATE = "Previous balance as of"
+    SEARCHING_FOR_TRANSACTION_DETAILS = "Transaction details"
+    # We'll see the "Transaction Details" h2 header, then later in the table we'll see payment / purchase / etc h3 headers
+    # So start off in "SEARCHING_FOR_TRANSACTION_TYPE"
 
-SEARCHING_FOR_TRANSACTION_DETAILS: str = "Transaction details"
-# We'll see the "Transaction Details" h2 header, then later in the table we'll see payment / purchase / etc h3 headers
-# So start off in "SEARCHING_FOR_TRANSACTION_TYPE"
-SEARCHING_FOR_TRANSACTION_TYPE: str = "Haven't found transactions type yet (this string does not occur in the file itself)"
-
-TRANSACTIONS_CONTINUED_LATER: str = "(Continued on next page)"
-
-START_OF_PAYMENTS: str = "Payments"
-PAYMENTS: str = "Reading payment lines (this string does not occur in the file itself)"
-
-START_OF_OTHER_CREDITS: str = "Other credits"
-OTHER_CREDITS: str = "Reading Other credits lines (this string does not occur in the file itself)"
-
-START_OF_PURCHASES: str = "Purchases and other debits"
-PURCHASES: str = "Reading purchase lines (this string does not occur in the file itself)"
-
-FINISHED: str = "Total fees charged this period"
+    SEARCHING_FOR_TRANSACTION_TYPE = "Haven't found transactions type yet (this string does not occur in the file itself)"
+    TRANSACTIONS_CONTINUED_LATER = "(Continued on next page)"
+    START_OF_PAYMENTS = "Payments"
+    PAYMENTS = "Reading payment lines (this string does not occur in the file itself)"
+    START_OF_OTHER_CREDITS = "Other credits"
+    OTHER_CREDITS = "Reading Other credits lines (this string does not occur in the file itself)"
+    START_OF_PURCHASES = "Purchases and other debits"
+    PURCHASES = "Reading purchase lines (this string does not occur in the file itself)"
+    FINISHED = "Total fees charged this period"
 
 
-class ProgramStates(States):
+
+class ProgramStates:
+    states = [
+        TransactionStates.PREVIOUS_BALANCE_DATE.name,
+        TransactionStates.SEARCHING_FOR_TRANSACTION_DETAILS.name,
+        TransactionStates.SEARCHING_FOR_TRANSACTION_TYPE.name,
+        TransactionStates.PAYMENTS.name,
+        TransactionStates.OTHER_CREDITS.name,
+        TransactionStates.PURCHASES.name,
+        TransactionStates.FINISHED.name
+    ]
+
     def __init__(self):
-        super().__init__([PREVIOUS_BALANCE_DATE, \
-                          SEARCHING_FOR_TRANSACTION_DETAILS, \
-                          SEARCHING_FOR_TRANSACTION_TYPE, \
-                          # START_OF_PAYMENTS, \
-                          PAYMENTS, \
-                          # START_OF_OTHER_CREDITS, \
-                          OTHER_CREDITS, \
-                          # START_OF_PURCHASES, \
-                          PURCHASES, \
-                          TRANSACTIONS_CONTINUED_LATER, \
-                          FINISHED])
+        transitions = [
+            {'trigger': 'process', 'source': TransactionStates.PREVIOUS_BALANCE_DATE.name,
+             'conditions': lambda line: re.search(rePREVIOUS_BALANCE_DATE, line) is not None,
+             'dest': TransactionStates.SEARCHING_FOR_TRANSACTION_DETAILS.name,
+             'before': 'save_previous_balance_date', },
+            {'trigger': 'process', 'source': TransactionStates.SEARCHING_FOR_TRANSACTION_DETAILS.name,
+             'conditions': lambda line: TransactionStates.SEARCHING_FOR_TRANSACTION_DETAILS.value in line,
+             'dest': TransactionStates.SEARCHING_FOR_TRANSACTION_TYPE.name,
+             'after': 'found_search_for_xact'},
+
+            #################### SEARCHING_FOR_TRANSACTION_TYPE ########################################################
+            {'trigger': 'process', 'source': TransactionStates.SEARCHING_FOR_TRANSACTION_TYPE.name, 'dest': TransactionStates.PAYMENTS.name,
+             'before': self.make_store_current_xact_type(TransactionStates.PAYMENTS),
+             'conditions': lambda line: TransactionStates.START_OF_PAYMENTS.value in line,}, ## TODO: ReadingLineStates
+            {'trigger': 'process', 'source': TransactionStates.SEARCHING_FOR_TRANSACTION_TYPE.name,
+             'conditions': lambda line: TransactionStates.START_OF_OTHER_CREDITS.value in line,
+             'dest': TransactionStates.OTHER_CREDITS.name,
+             'before': self.make_store_current_xact_type(TransactionStates.OTHER_CREDITS)},  ## TODO: ReadingLineStates
+            {'trigger': 'process', 'source': TransactionStates.SEARCHING_FOR_TRANSACTION_TYPE.name,
+             'conditions': lambda line: TransactionStates.START_OF_PURCHASES.value in line,
+             'dest': TransactionStates.PURCHASES.name,
+             'before': self.make_store_current_xact_type(TransactionStates.PURCHASES)},  ## TODO: ReadingLineStates
+            {'trigger': 'process', 'source': TransactionStates.SEARCHING_FOR_TRANSACTION_TYPE.name,
+             'conditions': lambda line: TransactionStates.TRANSACTIONS_CONTINUED_LATER.value in line,
+            'dest': TransactionStates.SEARCHING_FOR_TRANSACTION_DETAILS.name,},
+             # 'before': },  ## TODO: line_reader.reset()  # dump any partial info
+
+            #################### PAYMENTS ##############################################################################
+            {'trigger': 'process', 'source': TransactionStates.PAYMENTS.name,
+             'conditions': lambda line: TransactionStates.START_OF_PURCHASES.value in line,
+             'dest': TransactionStates.PURCHASES.name,
+             'before': self.make_store_current_xact_type(TransactionStates.PURCHASES)},  ## TODO: ReadingLineStates
+            {'trigger': 'process', 'source': TransactionStates.PAYMENTS.name,
+             'dest': TransactionStates.OTHER_CREDITS.name,
+             'conditions': lambda line: TransactionStates.START_OF_OTHER_CREDITS.value in line,
+             'before': self.make_store_current_xact_type(TransactionStates.OTHER_CREDITS)},  ## TODO: ReadingLineStates
+            {'trigger': 'process', 'source': TransactionStates.PAYMENTS.name,
+             'dest': TransactionStates.SEARCHING_FOR_TRANSACTION_DETAILS.name,
+             'conditions': lambda line: TransactionStates.TRANSACTIONS_CONTINUED_LATER.value in line},
+             # 'before': },  ## TODO: line_reader.reset()  # dump any partial info
+            {'trigger': 'process', 'source': TransactionStates.PAYMENTS.name,
+             'dest': None, # internal transition - do this every time we call 'process' and we're in PAYMENTS
+             'before': 'process_xact_chunk'},
+            #     elif line_reader.processLine(line) == FINISHED:
+            #         all_payments.append(line_reader.cur_xact)
+            #         line_reader.reset()
+
+            #################### OTHER CREDITS #########################################################################
+            {'trigger': 'process', 'source': TransactionStates.OTHER_CREDITS.name,
+             'conditions': lambda line: TransactionStates.START_OF_PURCHASES.value in line,
+             'dest': TransactionStates.PURCHASES.name,
+             'before': self.make_store_current_xact_type(TransactionStates.PURCHASES)},  ## TODO: ReadingLineStates
+            {'trigger': 'process', 'source': TransactionStates.OTHER_CREDITS.name,
+             'conditions': lambda line: TransactionStates.FINISHED.value in line,
+             'dest': TransactionStates.FINISHED.name,},
+            {'trigger': 'process', 'source': TransactionStates.OTHER_CREDITS.name,
+             'conditions': lambda line: TransactionStates.TRANSACTIONS_CONTINUED_LATER.value in line,
+             'dest': TransactionStates.SEARCHING_FOR_TRANSACTION_DETAILS.name,},
+            # 'before': },  ## TODO: line_reader.reset()  # dump any partial info
+            {'trigger': 'process', 'source': TransactionStates.OTHER_CREDITS.name,
+             'dest': None, # internal transition - do this every time we call 'process' and we're in PAYMENTS
+             'before': 'process_xact_chunk'},
+
+            #################### PURCHASES #############################################################################
+            {'trigger': 'process', 'source': TransactionStates.PURCHASES.name,
+             'conditions': lambda line: TransactionStates.FINISHED.value in line,
+             'dest': TransactionStates.FINISHED.name,},
+            {'trigger': 'process', 'source': TransactionStates.PURCHASES.name,
+             'conditions': lambda line: TransactionStates.TRANSACTIONS_CONTINUED_LATER.value in line,
+             'dest': TransactionStates.SEARCHING_FOR_TRANSACTION_DETAILS.name,},
+             # 'before': },  ## TODO: line_reader.reset()  # dump any partial info
+
+            {'trigger': 'process', 'source': TransactionStates.PURCHASES.name,
+             'dest': None, # internal transition - do this every time we call 'process' and we're in PAYMENTS
+             'before': 'process_xact_chunk'},
+        ]
 
 
-previous_balance_date: date = None
+        # Initialize the state machine with states and transitions
+        self.machine = Machine(model=self, states=ProgramStates.states, transitions=transitions,
+                               initial=TransactionStates.PREVIOUS_BALANCE_DATE.name)
+        self.previous_balance_date: date = None
+        self.current_xact_type = TransactionStates.SEARCHING_FOR_TRANSACTION_TYPE.name
+        self.line_reader = ReadingLineStates()
+        self.line_reader.log_state_machine.setLevel(logging.WARN)
 
+        self.all_payments: [Transaction] = []
+        self.all_other_credits: [Transaction] = []
+        self.all_purchases: [Transaction] = []
+
+    def process_xact_chunk(self, line):
+        # print(f"process_xact_chunk: {self.state} line={line}")
+        result = self.line_reader.processLine(line)
+
+        if result == TransactionStates.FINISHED.name:
+            if self.current_xact_type == TransactionStates.PAYMENTS.name:
+                self.all_payments.append(self.line_reader.cur_xact)
+            elif self.current_xact_type == TransactionStates.OTHER_CREDITS.name:
+                self.all_other_credits.append(self.line_reader.cur_xact)
+            elif self.current_xact_type == TransactionStates.PURCHASES.name:
+                self.all_purchases.append(self.line_reader.cur_xact)
+            else:
+                raise Exception(f"self.current_xact_type is neither PAYMENTS nor OTHER_CREDITS nor PURCHASES, but instead it's {self.current_xact_type}")
+
+            self.line_reader.reset()
+
+        return result
+
+    def save_previous_balance_date(self, line):
+        global previous_balance_date
+        match = re.search(rePREVIOUS_BALANCE_DATE, line)
+        assert match
+        previous_balance_date = datetime.strptime(match.group(1), "%m/%d/%Y").date()
+
+    def found_search_for_xact(self, line):
+        if self.current_xact_type == TransactionStates.SEARCHING_FOR_TRANSACTION_TYPE.name:
+            self.machine.set_state(TransactionStates.SEARCHING_FOR_TRANSACTION_TYPE.name)
+        else:  # otherwise keep looking for whatever sort of xact we've most recently seen:
+            self.machine.set_state(self.current_xact_type)
+
+    def make_store_current_xact_type(self, xact_state: TransactionStates):
+        return lambda event_data: self._set_current_xact_type(xact_state)
+
+    def _set_current_xact_type(self, xact_state: TransactionStates):
+        self.current_xact_type = xact_state.name
+        ## line_reader = ReadingLineStates() ## TODO: LINE READING!!!!
+
+
+class BreakLoop(Exception): pass # ChatGPT gave me this terrible hack;  I'm totally gonna use it :)
 
 def ConvertVenmoStatement(file_to_parse: str, output_file: str):
-    global previous_balance_date
-    previous_balance_date = None
     program_state = ProgramStates()
-    current_xact_type = SEARCHING_FOR_TRANSACTION_TYPE
-    line_reader = ReadingLineStates()
-    line_reader.log_state_machine.setLevel(logging.WARN)
-    continue_searching = True  # to break out of nested loops
-    all_payments: [Transaction] = []
-    all_other_credits: [Transaction] = []
-    all_purchases: [Transaction] = []
+
     fd = open(file_to_parse, "rb")
     viewer = SimplePDFViewer(fd)
-    for canvas in viewer:
-        # page_text = canvas.text_content # text_content has lots of extra info & formatting, etc
-        page_strings = canvas.strings  # this is a list of the actual text that we want to process
 
-        for line in page_strings:
-            # print("\t\tline: " + line)
+    try:
+        for canvas in viewer:
+            # page_text = canvas.text_content # text_content has lots of extra info & formatting, etc
+            page_strings = canvas.strings  # this is a list of the actual text that we want to process
 
-            if program_state.getCurrentState() == PREVIOUS_BALANCE_DATE:
-                match = re.search(rePREVIOUS_BALANCE_DATE, line)
-                if match:
-                    previous_balance_date = datetime.strptime(match.group(1), "%m/%d/%Y").date()
-                    # print("previous_balance_date: " + str(previous_balance_date) + " <= This is the starting year =================")
-                    program_state.setCurrentState(SEARCHING_FOR_TRANSACTION_DETAILS)
+            for line in page_strings:
+                program_state.process(line)
+                #print(program_state.state + ": cur_xact: " + program_state.current_xact_type + " : " + line)
 
-            elif program_state.getCurrentState() == SEARCHING_FOR_TRANSACTION_DETAILS:
-                if SEARCHING_FOR_TRANSACTION_DETAILS in line:
-                    # print("FOUND TRANSACTION DETAILS!!!!! ===================================================")
+                if program_state.state is TransactionStates.FINISHED.name:
+                    print("Finished parsing - exiting!")
+                    raise BreakLoop
 
-                    if current_xact_type == SEARCHING_FOR_TRANSACTION_TYPE:
-                        program_state.setCurrentState(SEARCHING_FOR_TRANSACTION_TYPE)
-                    else:  # otherwise keep looking for whatever sort of xact we've most recently seen:
-                        program_state.setCurrentState(current_xact_type)
-
-            elif program_state.getCurrentState() == SEARCHING_FOR_TRANSACTION_TYPE:
-                if START_OF_PAYMENTS in line:
-                    # print("  PAYMENTS!!!!! ===================================================")
-                    program_state.setCurrentState(PAYMENTS)
-                    current_xact_type = PAYMENTS
-                    line_reader = ReadingLineStates()
-
-                elif START_OF_OTHER_CREDITS in line:
-                    # print("FOUND OTHER CREDITS!!!!! ===================================================")
-                    program_state.setCurrentState(OTHER_CREDITS)
-                    current_xact_type = OTHER_CREDITS
-                    line_reader = ReadingLineStates()
-
-                elif START_OF_PURCHASES in line:
-                    # print("FOUND START_OF_PURCHASES !!!!! ===================================================")
-                    program_state.setCurrentState(PURCHASES)
-                    current_xact_type = PURCHASES
-                    line_reader = ReadingLineStates()
-
-                elif TRANSACTIONS_CONTINUED_LATER in line:
-                    program_state.setCurrentState(SEARCHING_FOR_TRANSACTION_DETAILS)
-                    # print("END OF TRANSACTION DETAILS ==========================================================")
-                    line_reader.reset()  # dump any partial info
-
-            elif program_state.getCurrentState() == PAYMENTS:
-                if START_OF_PURCHASES in line:
-                    program_state.setCurrentState(PURCHASES)
-                    current_xact_type = PURCHASES
-                    # print("END OF PAYMENTS, START OF PURCHASES!!!! =========================================================")
-                    line_reader = ReadingLineStates()
-
-                elif START_OF_OTHER_CREDITS in line:
-                    program_state.setCurrentState(OTHER_CREDITS)
-                    current_xact_type = OTHER_CREDITS
-                    # print( "END OF PAYMENTS, START OF OTHER_CREDITS!!!! =====================================================")
-                    line_reader = ReadingLineStates()
-
-                elif TRANSACTIONS_CONTINUED_LATER in line:
-                    program_state.setCurrentState(SEARCHING_FOR_TRANSACTION_DETAILS)
-                    # print("END OF TRANSACTION DETAILS ==========================================================")
-                    line_reader.reset()  # dump any partial info
-
-                elif line_reader.processLine(line) == FINISHED:
-                    all_payments.append(line_reader.cur_xact)
-                    line_reader.reset()
-
-            elif program_state.getCurrentState() == OTHER_CREDITS:
-                if START_OF_PURCHASES in line:
-                    program_state.setCurrentState(PURCHASES)
-                    current_xact_type = PURCHASES
-                    # print( "END OF OTHER_CREDITS, START OF PURCHASES!!!! =========================================================")
-                    line_reader = ReadingLineStates()
-
-                elif TRANSACTIONS_CONTINUED_LATER in line:
-                    program_state.setCurrentState(SEARCHING_FOR_TRANSACTION_DETAILS)
-                    # print("END OF TRANSACTION DETAILS ==========================================================")
-                    line_reader.reset()  # dump any partial info
-
-                elif line_reader.processLine(line) == FINISHED:
-                    all_other_credits.append(line_reader.cur_xact)
-                    line_reader.reset()
-
-
-            elif program_state.getCurrentState() == PURCHASES:
-                # If we see the 'end of purchases' marker then go directly to the FINISHED state
-                if FINISHED in line:
-                    program_state.setCurrentState(FINISHED)
-                    # print("END OF TRANSACTIONS!!!! ============================================================")
-                elif TRANSACTIONS_CONTINUED_LATER in line:
-                    program_state.setCurrentState(SEARCHING_FOR_TRANSACTION_DETAILS)
-                    # print("END OF TRANSACTION DETAILS ==========================================================")
-                    line_reader.reset()  # dump any partial info
-                elif line_reader.processLine(line) == FINISHED:
-                    all_purchases.append(line_reader.cur_xact)
-                    line_reader.reset()
-
-            elif program_state.getCurrentState() == FINISHED:
-                continue_searching = False
-                break
-
-            else:
-                print("ERROR!! Unknown State!")
-                exit(-1)
-
-        if continue_searching is False:
-            break
-
-    # print(" ")
+    except BreakLoop:
+        pass
+    print(" ")
 
     def print_xacts(xacts: [Transaction], name: str):
         total = Decimal(0)
@@ -328,8 +367,8 @@ def ConvertVenmoStatement(file_to_parse: str, output_file: str):
     ### Write transactions to the file
     #  Make payments & credits negative, leave purchases positive
     all_xacts = [Transaction(xact.date, xact.reference_num, xact.description, -1 * xact.amount) for xact in
-                 all_payments + all_other_credits] \
-                + all_purchases
+                 program_state.all_payments + program_state.all_other_credits] \
+                + program_state.all_purchases
     all_xacts.sort(key=attrgetter('date'))
 
     with open(output_file, 'w', newline='') as csvfile:
@@ -345,15 +384,15 @@ def ConvertVenmoStatement(file_to_parse: str, output_file: str):
     # print("")
 
     # print_xacts(all_payments, "payments")
-    total = reduce(xact_adder, all_payments, Decimal(0))
+    total = reduce(xact_adder, program_state.all_payments, Decimal(0))
     print("Sum of payments: " + str(total))
 
     # print_xacts(all_other_credits, "other credits")
-    total = reduce(xact_adder, all_other_credits, Decimal(0))
+    total = reduce(xact_adder, program_state.all_other_credits, Decimal(0))
     print("Sum of other credits: " + str(total))
 
     # print_xacts(all_purchases, "purchases")
-    total = reduce(xact_adder, all_purchases, Decimal(0))
+    total = reduce(xact_adder, program_state.all_purchases, Decimal(0))
     print("Sum of purchases: " + str(total))
 
     print("\nWrote all transactions to\n\t" + output_file)
