@@ -70,107 +70,6 @@ class Transaction:
         return f'Transaction({self.amount},\t{self.reference_num},\t{self.description})'
 
 
-@define
-class States:
-    # what are we looking for next?
-    possible_states: [str]
-    current_state: int
-    log_state_machine: Any
-
-    def __init__(self, states):
-        self.possible_states = states
-        self.current_state = 0
-        log_name = "PersonalTool.Venmo.StateMachine" + "." + type(self).__name__
-        self.log_state_machine = logging.getLogger(log_name)
-        self.log_state_machine.setLevel(logging.ERROR)
-
-    def getCurrentState(self):
-        return self.possible_states[self.current_state]
-
-    def setCurrentState(self, newState: str):
-        # index() "index raises ValueError when x is not found in s"
-        # From: https://docs.python.org/3/library/stdtypes.html?highlight=list%20index
-        self.current_state = self.possible_states.index(newState)
-        self.log_state_machine.info(
-            "State Machine changed state to " + str(self.current_state) + ": \"" + self.getCurrentState() + "\"")
-
-
-DATE: str = 'date'
-reDateOfTransaction = re.compile("(\d\d/\d\d)")
-REF: str = 'ref'
-DESC: str = 'desc'
-AMT: str = 'amt'
-
-
-@define
-class ReadingLineStates(States):
-    cur_xact: Transaction  # We'll reset to a new object a lot
-    previous_date: date  # So remember when the last transaction was separate from cur_xact
-
-    def __init__(self):
-        super().__init__([DATE, REF, DESC, AMT, TransactionStates.FINISHED.name])
-        self.previous_date = None
-        self.reset()
-
-    def reset(self):
-        self.cur_xact = Transaction()
-        self.setCurrentState(DATE)
-
-    def processLine(self, line):
-        global previous_balance_date
-
-        if self.getCurrentState() == DATE:
-            if re.search(reDateOfTransaction, line):
-                # print("FOUND A DATE!!!!!")
-                assert previous_balance_date is not None
-
-                if self.previous_date is not None:
-                    xact_year = self.previous_date.year
-                else:
-                    xact_year = previous_balance_date.year
-
-                xact_date = datetime.strptime(line + "/" + str(xact_year), "%m/%d/%Y").date()
-
-                # if the previous date is in last Dec & the current date is in January:
-                if self.previous_date is not None and \
-                        self.previous_date.month == 12 and xact_date.month == 1:
-                    xact_date = date(xact_date.year + 1, xact_date.month, xact_date.day)
-
-                # If the first date we're seeing is in January but the prior balance
-                # date is in Dec the move the year up
-                if self.previous_date is None and \
-                        xact_date < previous_balance_date \
-                        and previous_balance_date.month == 12 \
-                        and xact_date.month == 1:
-                    xact_date = date(xact_date.year + 1, xact_date.month, xact_date.day)
-
-                self.cur_xact.date = xact_date
-                self.previous_date = xact_date
-                self.setCurrentState(REF)
-
-        elif self.getCurrentState() == REF:
-            self.cur_xact.reference_num = line
-            self.setCurrentState(DESC)
-
-        elif self.getCurrentState() == DESC:
-            self.cur_xact.description = line
-            self.setCurrentState(AMT)
-
-        elif self.getCurrentState() == AMT:
-            value = Decimal(re.sub(r'[^\d.]', '', line))
-            self.cur_xact.amount = value
-
-            print("Found transaction: " + str(self.cur_xact))
-
-            self.setCurrentState(TransactionStates.FINISHED.name)
-
-        elif self.getCurrentState() == TransactionStates.FINISHED.name:
-            pass
-
-        return self.getCurrentState()
-
-
-rePREVIOUS_BALANCE_DATE = re.compile("Previous balance as of (\d\d/\d\d/\d\d\d\d)")
 class TransactionStates(Enum):
     PREVIOUS_BALANCE_DATE = "Previous balance as of"
     SEARCHING_FOR_TRANSACTION_DETAILS = "Transaction details"
@@ -187,9 +86,103 @@ class TransactionStates(Enum):
     PURCHASES = "Reading purchase lines (this string does not occur in the file itself)"
     FINISHED = "Total fees charged this period"
 
+class LineReadingFSMStates(Enum):
+    DATE: str = 'date'
+    REF: str = 'ref'
+    DESC: str = 'desc'
+    AMT: str = 'amt'
+    FINISHED: str = 'FINISHED READING TRANSACTION LINE'
+
+reDateOfTransaction = re.compile("(\d\d/\d\d)")
+
+class LineReadingFSM:
+    states = [
+        LineReadingFSMStates.DATE,
+        LineReadingFSMStates.REF,
+        LineReadingFSMStates.DESC,
+        LineReadingFSMStates.AMT,
+        LineReadingFSMStates.FINISHED
+    ]
+    cur_xact: Transaction  # We'll reset to a new object a lot
+    previous_date: date  # So remember when the last transaction was separate from cur_xact
+    def __init__(self):
+        transitions = [
+            {'trigger': 'process', 'source': LineReadingFSMStates.DATE,
+             'conditions': lambda line: re.search(reDateOfTransaction, line) is not None,
+             'dest': LineReadingFSMStates.REF,
+             'before': 'save_xact_date', },
+            {'trigger': 'process', 'source': LineReadingFSMStates.REF,
+             'dest': LineReadingFSMStates.DESC,
+             'after': 'save_xact_ref_num'},
+            {'trigger': 'process', 'source': LineReadingFSMStates.DESC,
+             'dest': LineReadingFSMStates.AMT,
+             'after': 'save_xact_desc'},
+            {'trigger': 'process', 'source': LineReadingFSMStates.AMT,
+             'dest': LineReadingFSMStates.FINISHED,
+             'after': 'save_xact_amt'},
+        ]
 
 
-class ProgramStates:
+        # Initialize the state machine with states and transitions
+        self.machine = Machine(model=self, states=LineReadingFSM.states, transitions=transitions,
+                               initial=LineReadingFSMStates.DATE)
+
+        self.previous_date = None
+        self.reset()
+
+    def reset(self):
+        self.cur_xact = Transaction()
+        self.machine.set_state(LineReadingFSMStates.DATE)
+
+    def save_xact_date(self, line):
+        global previous_balance_date
+        # print("FOUND A DATE!!!!!")
+        assert previous_balance_date is not None
+
+        if self.previous_date is not None:
+            xact_year = self.previous_date.year
+        else:
+            xact_year = previous_balance_date.year
+
+        xact_date = datetime.strptime(line + "/" + str(xact_year), "%m/%d/%Y").date()
+
+        # if the previous date is in last Dec & the current date is in January:
+        if self.previous_date is not None and \
+                self.previous_date.month == 12 and xact_date.month == 1:
+            xact_date = date(xact_date.year + 1, xact_date.month, xact_date.day)
+
+        # If the first date we're seeing is in January but the prior balance
+        # date is in Dec the move the year up
+        if self.previous_date is None and \
+                xact_date < previous_balance_date \
+                and previous_balance_date.month == 12 \
+                and xact_date.month == 1:
+            xact_date = date(xact_date.year + 1, xact_date.month, xact_date.day)
+
+        self.cur_xact.date = xact_date
+        self.previous_date = xact_date
+
+    def save_xact_ref_num(self, line):
+        self.cur_xact.reference_num = line
+
+    def save_xact_desc(self, line):
+        self.cur_xact.description = line
+
+    def save_xact_amt(self, line):
+        value = Decimal(re.sub(r'[^\d.]', '', line))
+        self.cur_xact.amount = value
+        print("Found transaction: " + str(self.cur_xact))
+
+    # elif self.getCurrentState() == TransactionStates.FINISHED.name:
+    #     pass
+    def process_line(self, line):
+        self.process(line)
+        return self.machine.model.state
+
+
+rePREVIOUS_BALANCE_DATE = re.compile("Previous balance as of (\d\d/\d\d/\d\d\d\d)")
+
+class DocumentScannerFSM:
     states = [
         TransactionStates.PREVIOUS_BALANCE_DATE.name,
         TransactionStates.SEARCHING_FOR_TRANSACTION_DETAILS.name,
@@ -244,7 +237,7 @@ class ProgramStates:
             {'trigger': 'process', 'source': TransactionStates.PAYMENTS.name,
              'dest': None, # internal transition - do this every time we call 'process' and we're in PAYMENTS
              'before': 'process_xact_chunk'},
-            #     elif line_reader.processLine(line) == FINISHED:
+            #     elif line_reader.process_line(line) == FINISHED:
             #         all_payments.append(line_reader.cur_xact)
             #         line_reader.reset()
 
@@ -280,12 +273,12 @@ class ProgramStates:
 
 
         # Initialize the state machine with states and transitions
-        self.machine = Machine(model=self, states=ProgramStates.states, transitions=transitions,
+        self.machine = Machine(model=self, states=DocumentScannerFSM.states, transitions=transitions,
                                initial=TransactionStates.PREVIOUS_BALANCE_DATE.name)
         self.previous_balance_date: date = None
         self.current_xact_type = TransactionStates.SEARCHING_FOR_TRANSACTION_TYPE.name
-        self.line_reader = ReadingLineStates()
-        self.line_reader.log_state_machine.setLevel(logging.WARN)
+        self.line_reader = LineReadingFSM()
+        #self.line_reader.log_state_machine.setLevel(logging.WARN)
 
         self.all_payments: [Transaction] = []
         self.all_other_credits: [Transaction] = []
@@ -293,9 +286,9 @@ class ProgramStates:
 
     def process_xact_chunk(self, line):
         # print(f"process_xact_chunk: {self.state} line={line}")
-        result = self.line_reader.processLine(line)
+        result = self.line_reader.process_line(line)
 
-        if result == TransactionStates.FINISHED.name:
+        if result == LineReadingFSMStates.FINISHED:
             if self.current_xact_type == TransactionStates.PAYMENTS.name:
                 self.all_payments.append(self.line_reader.cur_xact)
             elif self.current_xact_type == TransactionStates.OTHER_CREDITS.name:
@@ -332,7 +325,7 @@ class ProgramStates:
 class BreakLoop(Exception): pass # ChatGPT gave me this terrible hack;  I'm totally gonna use it :)
 
 def ConvertVenmoStatement(file_to_parse: str, output_file: str):
-    program_state = ProgramStates()
+    program_state = DocumentScannerFSM()
 
     fd = open(file_to_parse, "rb")
     viewer = SimplePDFViewer(fd)
