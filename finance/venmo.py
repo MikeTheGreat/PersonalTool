@@ -210,15 +210,15 @@ class FileReaderFSM:
 
         xact_reader_fsm = HierarchicalMachine(states=xact_reading_states, \
                                       transitions=xact_reading_transitions, \
-                                      initial='XactReadingFSMStates.DATE')
+                                      initial=XactReadingFSMStates.DATE)
 
         file_reading_states = [
             FileReadingFSMStates.PreviousBalanceDate,
             FileReadingFSMStates.SearchingForTransactionDetails,
             FileReadingFSMStates.SearchingForTransactionType,
-            {'name': FileReadingFSMStates.Payments.name, 'children': xact_reader_fsm},
-            {'name': FileReadingFSMStates.OtherCredits.name, 'children': xact_reader_fsm},
-            {'name': FileReadingFSMStates.Purchases.name, 'children': xact_reader_fsm},
+            {'name': FileReadingFSMStates.Payments, 'children': xact_reader_fsm},
+            {'name': FileReadingFSMStates.OtherCredits, 'children': xact_reader_fsm},
+            {'name': FileReadingFSMStates.Purchases, 'children': xact_reader_fsm},
             FileReadingFSMStates.Finished
         ]
 
@@ -280,7 +280,7 @@ class FileReaderFSM:
                                               FileReadingFSMStates.Purchases,
                                               FileReadingFSMStates.OtherCredits],
              'dest': None,  # internal transition - do this every time we call 'process' and we're in PAYMENTS
-             'after': 'process_xact_chunk'},
+             'after': 'processXact'},
         ]
 
 
