@@ -42,9 +42,9 @@ import logging
 # logger_transactions = logging.getLogger('PersonalTool.venmo.transactions')
 # logger_transactions.setLevel(logging.DEBUG)
 
-logging.basicConfig(level=logging.INFO)
-# Set transitions' log level to INFO; DEBUG messages will be omitted
-logging.getLogger('transitions').setLevel(logging.INFO)
+# logging.basicConfig(level=logging.INFO)
+# # Set transitions' log level to INFO; DEBUG messages will be omitted
+# logging.getLogger('transitions').setLevel(logging.INFO)
 
 previous_balance_date: date = None
 
@@ -103,7 +103,7 @@ class LineReadingFSM:
         LineReadingFSMStates.AMT,
         LineReadingFSMStates.FINISHED
     ]
-    cur_xact: Transaction  # We'll reset to a new object a lot
+    cur_xact: Transaction  # We'll reset this a lot
     previous_date: date  # So remember when the last transaction was separate from cur_xact
     def __init__(self):
         transitions = [
@@ -195,80 +195,64 @@ class DocumentScannerFSM:
 
     def __init__(self):
         transitions = [
+            # First, find the date of the prior statement, so we can figure out which year we're in
             {'trigger': 'process', 'source': TransactionStates.PREVIOUS_BALANCE_DATE.name,
              'conditions': lambda line: re.search(rePREVIOUS_BALANCE_DATE, line) is not None,
              'dest': TransactionStates.SEARCHING_FOR_TRANSACTION_DETAILS.name,
-             'before': 'save_previous_balance_date', },
+             'after': 'save_previous_balance_date', },
+
+            # The transactions are all listed together, so let's find where the transactions start:
             {'trigger': 'process', 'source': TransactionStates.SEARCHING_FOR_TRANSACTION_DETAILS.name,
              'conditions': lambda line: TransactionStates.SEARCHING_FOR_TRANSACTION_DETAILS.value in line,
              'dest': TransactionStates.SEARCHING_FOR_TRANSACTION_TYPE.name,
              'after': 'found_search_for_xact'},
 
-            #################### SEARCHING_FOR_TRANSACTION_TYPE ########################################################
-            {'trigger': 'process', 'source': TransactionStates.SEARCHING_FOR_TRANSACTION_TYPE.name, 'dest': TransactionStates.PAYMENTS.name,
-             'before': self.make_store_current_xact_type(TransactionStates.PAYMENTS),
-             'conditions': lambda line: TransactionStates.START_OF_PAYMENTS.value in line,}, ## TODO: ReadingLineStates
-            {'trigger': 'process', 'source': TransactionStates.SEARCHING_FOR_TRANSACTION_TYPE.name,
+            # Transactions are subgrouped by type(payment to Venmo, credits / refunds, purchases)
+            # (They always seem to be in PAYMENT, OTHER_CREDIT, PURCHASES order
+            {'trigger': 'process', 'source': [TransactionStates.SEARCHING_FOR_TRANSACTION_TYPE.name,
+                                              TransactionStates.OTHER_CREDITS.name,
+                                              TransactionStates.PAYMENTS.name],
+             'conditions': lambda line: TransactionStates.START_OF_PAYMENTS.value in line,
+             'dest': TransactionStates.PAYMENTS.name,
+             'after': 'save_current_xact_type',},
+            {'trigger': 'process', 'source': [TransactionStates.SEARCHING_FOR_TRANSACTION_TYPE.name,
+                                              TransactionStates.PURCHASES.name,
+                                              TransactionStates.PAYMENTS.name,],
              'conditions': lambda line: TransactionStates.START_OF_OTHER_CREDITS.value in line,
              'dest': TransactionStates.OTHER_CREDITS.name,
-             'before': self.make_store_current_xact_type(TransactionStates.OTHER_CREDITS)},  ## TODO: ReadingLineStates
-            {'trigger': 'process', 'source': TransactionStates.SEARCHING_FOR_TRANSACTION_TYPE.name,
+             'after': 'save_current_xact_type'},
+            {'trigger': 'process', 'source': [TransactionStates.SEARCHING_FOR_TRANSACTION_TYPE.name,
+                                              TransactionStates.PAYMENTS.name,
+                                              TransactionStates.OTHER_CREDITS.name,],
              'conditions': lambda line: TransactionStates.START_OF_PURCHASES.value in line,
              'dest': TransactionStates.PURCHASES.name,
-             'before': self.make_store_current_xact_type(TransactionStates.PURCHASES)},  ## TODO: ReadingLineStates
-            {'trigger': 'process', 'source': TransactionStates.SEARCHING_FOR_TRANSACTION_TYPE.name,
+             'after': 'save_current_xact_type'},
+
+            # Venmo always puts a boilerplate 2nd page, which interrupts the transaction list started on the 1st page
+            {'trigger': 'process', 'source': [TransactionStates.SEARCHING_FOR_TRANSACTION_TYPE.name,
+                                              TransactionStates.PAYMENTS.name,
+                                              TransactionStates.OTHER_CREDITS.name,
+                                              TransactionStates.PURCHASES.name],
              'conditions': lambda line: TransactionStates.TRANSACTIONS_CONTINUED_LATER.value in line,
-            'dest': TransactionStates.SEARCHING_FOR_TRANSACTION_DETAILS.name,},
-             # 'before': },  ## TODO: line_reader.reset()  # dump any partial info
+             'dest': TransactionStates.SEARCHING_FOR_TRANSACTION_DETAILS.name, },
 
-            #################### PAYMENTS ##############################################################################
-            {'trigger': 'process', 'source': TransactionStates.PAYMENTS.name,
-             'conditions': lambda line: TransactionStates.START_OF_PURCHASES.value in line,
-             'dest': TransactionStates.PURCHASES.name,
-             'before': self.make_store_current_xact_type(TransactionStates.PURCHASES)},  ## TODO: ReadingLineStates
-            {'trigger': 'process', 'source': TransactionStates.PAYMENTS.name,
-             'dest': TransactionStates.OTHER_CREDITS.name,
-             'conditions': lambda line: TransactionStates.START_OF_OTHER_CREDITS.value in line,
-             'before': self.make_store_current_xact_type(TransactionStates.OTHER_CREDITS)},  ## TODO: ReadingLineStates
-            {'trigger': 'process', 'source': TransactionStates.PAYMENTS.name,
-             'dest': TransactionStates.SEARCHING_FOR_TRANSACTION_DETAILS.name,
-             'conditions': lambda line: TransactionStates.TRANSACTIONS_CONTINUED_LATER.value in line},
-             # 'before': },  ## TODO: line_reader.reset()  # dump any partial info
-            {'trigger': 'process', 'source': TransactionStates.PAYMENTS.name,
-             'dest': None, # internal transition - do this every time we call 'process' and we're in PAYMENTS
-             'before': 'process_xact_chunk'},
-            #     elif line_reader.process_line(line) == FINISHED:
-            #         all_payments.append(line_reader.cur_xact)
-            #         line_reader.reset()
-
-            #################### OTHER CREDITS #########################################################################
-            {'trigger': 'process', 'source': TransactionStates.OTHER_CREDITS.name,
-             'conditions': lambda line: TransactionStates.START_OF_PURCHASES.value in line,
-             'dest': TransactionStates.PURCHASES.name,
-             'before': self.make_store_current_xact_type(TransactionStates.PURCHASES)},  ## TODO: ReadingLineStates
-            {'trigger': 'process', 'source': TransactionStates.OTHER_CREDITS.name,
+            # Once we've found the end of the transactions we're done
+            {'trigger': 'process', 'source': [TransactionStates.SEARCHING_FOR_TRANSACTION_TYPE.name,
+                                              TransactionStates.PAYMENTS.name,
+                                              TransactionStates.PURCHASES.name,
+                                              TransactionStates.OTHER_CREDITS.name,],
              'conditions': lambda line: TransactionStates.FINISHED.value in line,
              'dest': TransactionStates.FINISHED.name,},
-            {'trigger': 'process', 'source': TransactionStates.OTHER_CREDITS.name,
-             'conditions': lambda line: TransactionStates.TRANSACTIONS_CONTINUED_LATER.value in line,
-             'dest': TransactionStates.SEARCHING_FOR_TRANSACTION_DETAILS.name,},
-            # 'before': },  ## TODO: line_reader.reset()  # dump any partial info
-            {'trigger': 'process', 'source': TransactionStates.OTHER_CREDITS.name,
-             'dest': None, # internal transition - do this every time we call 'process' and we're in PAYMENTS
-             'before': 'process_xact_chunk'},
 
-            #################### PURCHASES #############################################################################
-            {'trigger': 'process', 'source': TransactionStates.PURCHASES.name,
-             'conditions': lambda line: TransactionStates.FINISHED.value in line,
-             'dest': TransactionStates.FINISHED.name,},
-            {'trigger': 'process', 'source': TransactionStates.PURCHASES.name,
-             'conditions': lambda line: TransactionStates.TRANSACTIONS_CONTINUED_LATER.value in line,
-             'dest': TransactionStates.SEARCHING_FOR_TRANSACTION_DETAILS.name,},
-             # 'before': },  ## TODO: line_reader.reset()  # dump any partial info
+            # Internal transitions MUST go last ########################################################################
+            # otherwise they'll match and transitions will stop any other real state transitions from happening
 
-            {'trigger': 'process', 'source': TransactionStates.PURCHASES.name,
-             'dest': None, # internal transition - do this every time we call 'process' and we're in PAYMENTS
-             'before': 'process_xact_chunk'},
+            # If we've found transactions, take the next column and hand it off to the line reader
+            {'trigger': 'process', 'source': [TransactionStates.PAYMENTS.name,
+                                              TransactionStates.PURCHASES.name,
+                                              TransactionStates.OTHER_CREDITS.name],
+             'dest': None,  # internal transition - do this every time we call 'process' and we're in PAYMENTS
+             'after': 'process_xact_chunk'},
         ]
 
 
@@ -314,12 +298,8 @@ class DocumentScannerFSM:
         else:  # otherwise keep looking for whatever sort of xact we've most recently seen:
             self.machine.set_state(self.current_xact_type)
 
-    def make_store_current_xact_type(self, xact_state: TransactionStates):
-        return lambda event_data: self._set_current_xact_type(xact_state)
-
-    def _set_current_xact_type(self, xact_state: TransactionStates):
-        self.current_xact_type = xact_state.name
-        ## line_reader = ReadingLineStates() ## TODO: LINE READING!!!!
+    def save_current_xact_type(self, line):
+        self.current_xact_type = self.machine.model.state
 
 
 class BreakLoop(Exception): pass # ChatGPT gave me this terrible hack;  I'm totally gonna use it :)
