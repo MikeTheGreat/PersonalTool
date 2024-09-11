@@ -27,6 +27,8 @@ from transitions import Machine
 
 import logging
 
+from transitions.extensions import HierarchicalMachine
+
 # logging.basicConfig(format='%(levelname)s %(name)s - %(message)s')
 #
 # # This would add a _second_ console printer, but with our custom format:
@@ -71,22 +73,22 @@ class Transaction:
 
 
 class FileReadingFSMStates(Enum):
-    PREVIOUS_BALANCE_DATE = "Previous balance as of"
-    SEARCHING_FOR_TRANSACTION_DETAILS = "Transaction details"
+    PreviousBalanceDate = "Previous balance as of"
+    SearchingForTransactionDetails = "Transaction details"
     # We'll see the "Transaction Details" h2 header, then later in the table we'll see payment / purchase / etc h3 headers
     # So start off in "SEARCHING_FOR_TRANSACTION_TYPE"
 
-    SEARCHING_FOR_TRANSACTION_TYPE = "Haven't found transactions type yet (this string does not occur in the file itself)"
+    SearchingForTransactionType = "Haven't found transactions type yet (this string does not occur in the file itself)"
     TRANSACTIONS_CONTINUED_LATER = "(Continued on next page)"
     START_OF_PAYMENTS = "Payments"
-    PAYMENTS = "Reading payment lines (this string does not occur in the file itself)"
+    Payments = "Reading payment lines (this string does not occur in the file itself)"
     START_OF_OTHER_CREDITS = "Other credits"
-    OTHER_CREDITS = "Reading Other credits lines (this string does not occur in the file itself)"
+    OtherCredits = "Reading Other credits lines (this string does not occur in the file itself)"
     START_OF_PURCHASES = "Purchases and other debits"
-    PURCHASES = "Reading purchase lines (this string does not occur in the file itself)"
-    FINISHED = "Total fees charged this period"
+    Purchases = "Reading purchase lines (this string does not occur in the file itself)"
+    Finished = "Total fees charged this period"
 
-class LineReadingFSMStates(Enum):
+class XactReadingFSMStates(Enum):
     DATE: str = 'date'
     REF: str = 'ref'
     DESC: str = 'desc'
@@ -96,43 +98,43 @@ class LineReadingFSMStates(Enum):
 reDateOfTransaction = re.compile("(\d\d/\d\d)")
 
 class LineReadingFSM:
-    states = [
-        LineReadingFSMStates.DATE,
-        LineReadingFSMStates.REF,
-        LineReadingFSMStates.DESC,
-        LineReadingFSMStates.AMT,
-        LineReadingFSMStates.FINISHED
+    xact_reading_states = [
+        XactReadingFSMStates.DATE,
+        XactReadingFSMStates.REF,
+        XactReadingFSMStates.DESC,
+        XactReadingFSMStates.AMT,
+        XactReadingFSMStates.FINISHED
     ]
     cur_xact: Transaction  # We'll reset this a lot
     previous_date: date  # So remember when the last transaction was separate from cur_xact
     def __init__(self):
-        transitions = [
-            {'trigger': 'process', 'source': LineReadingFSMStates.DATE,
+        xact_reading_transitions = [
+            {'trigger': 'process', 'source': XactReadingFSMStates.DATE,
              'conditions': lambda line: re.search(reDateOfTransaction, line) is not None,
-             'dest': LineReadingFSMStates.REF,
+             'dest': XactReadingFSMStates.REF,
              'before': 'save_xact_date', },
-            {'trigger': 'process', 'source': LineReadingFSMStates.REF,
-             'dest': LineReadingFSMStates.DESC,
+            {'trigger': 'process', 'source': XactReadingFSMStates.REF,
+             'dest': XactReadingFSMStates.DESC,
              'after': 'save_xact_ref_num'},
-            {'trigger': 'process', 'source': LineReadingFSMStates.DESC,
-             'dest': LineReadingFSMStates.AMT,
+            {'trigger': 'process', 'source': XactReadingFSMStates.DESC,
+             'dest': XactReadingFSMStates.AMT,
              'after': 'save_xact_desc'},
-            {'trigger': 'process', 'source': LineReadingFSMStates.AMT,
-             'dest': LineReadingFSMStates.FINISHED,
+            {'trigger': 'process', 'source': XactReadingFSMStates.AMT,
+             'dest': XactReadingFSMStates.FINISHED,
              'after': 'save_xact_amt'},
         ]
 
 
-        # Initialize the state machine with states and transitions
-        self.machine = Machine(model=self, states=LineReadingFSM.states, transitions=transitions,
-                               initial=LineReadingFSMStates.DATE)
+        # Initialize the state machine with states and xact_reading_transitions
+        self.machine = Machine(model=self, states=LineReadingFSM.xact_reading_states, transitions=xact_reading_transitions,
+                               initial=XactReadingFSMStates.DATE)
 
         self.previous_date = None
         self.reset()
 
     def reset(self):
         self.cur_xact = Transaction()
-        self.machine.set_state(LineReadingFSMStates.DATE)
+        self.machine.set_state(XactReadingFSMStates.DATE)
 
     def save_xact_date(self, line):
         global previous_balance_date
@@ -171,7 +173,7 @@ class LineReadingFSM:
     def save_xact_amt(self, line):
         value = Decimal(re.sub(r'[^\d.]', '', line))
         self.cur_xact.amount = value
-        print("Found transaction: " + str(self.cur_xact))
+        # print("Found transaction: " + str(self.cur_xact))
 
     def process_line(self, line):
         self.process(line)
@@ -181,84 +183,113 @@ class LineReadingFSM:
 rePREVIOUS_BALANCE_DATE = re.compile("Previous balance as of (\d\d/\d\d/\d\d\d\d)")
 
 class FileReaderFSM:
-    states = [
-        FileReadingFSMStates.PREVIOUS_BALANCE_DATE,
-        FileReadingFSMStates.SEARCHING_FOR_TRANSACTION_DETAILS,
-        FileReadingFSMStates.SEARCHING_FOR_TRANSACTION_TYPE,
-        FileReadingFSMStates.PAYMENTS,
-        FileReadingFSMStates.OTHER_CREDITS,
-        FileReadingFSMStates.PURCHASES,
-        FileReadingFSMStates.FINISHED
-    ]
-
     def __init__(self):
-        transitions = [
+        xact_reading_states = [
+            XactReadingFSMStates.DATE,
+            XactReadingFSMStates.REF,
+            XactReadingFSMStates.DESC,
+            XactReadingFSMStates.AMT,
+            XactReadingFSMStates.FINISHED
+        ]
+
+        xact_reading_transitions = [
+            {'trigger': 'processXact', 'source': XactReadingFSMStates.DATE,
+             #'conditions': lambda line: re.search(reDateOfTransaction, line) is not None,
+             'dest': XactReadingFSMStates.REF,
+             'after': lambda line: print(line), },
+            {'trigger': 'processXact', 'source': XactReadingFSMStates.REF,
+             'dest': XactReadingFSMStates.DESC,
+             'after': lambda line: print(line), },
+            {'trigger': 'processXact', 'source': XactReadingFSMStates.DESC,
+             'dest': XactReadingFSMStates.AMT,
+             'after': lambda line: print(line), },
+            {'trigger': 'processXact', 'source': XactReadingFSMStates.AMT,
+             'dest': XactReadingFSMStates.FINISHED,
+             'after': lambda line: print(line), },
+        ]
+
+        xact_reader_fsm = HierarchicalMachine(states=xact_reading_states, \
+                                      transitions=xact_reading_transitions, \
+                                      initial='XactReadingFSMStates.DATE')
+
+        file_reading_states = [
+            FileReadingFSMStates.PreviousBalanceDate,
+            FileReadingFSMStates.SearchingForTransactionDetails,
+            FileReadingFSMStates.SearchingForTransactionType,
+            {'name': FileReadingFSMStates.Payments.name, 'children': xact_reader_fsm},
+            {'name': FileReadingFSMStates.OtherCredits.name, 'children': xact_reader_fsm},
+            {'name': FileReadingFSMStates.Purchases.name, 'children': xact_reader_fsm},
+            FileReadingFSMStates.Finished
+        ]
+
+        file_reading_transitions = [
             # First, find the date of the prior statement, so we can figure out which year we're in
-            {'trigger': 'process', 'source': FileReadingFSMStates.PREVIOUS_BALANCE_DATE,
+            {'trigger': 'process', 'source': FileReadingFSMStates.PreviousBalanceDate,
              'conditions': lambda line: re.search(rePREVIOUS_BALANCE_DATE, line) is not None,
-             'dest': FileReadingFSMStates.SEARCHING_FOR_TRANSACTION_DETAILS,
+             'dest': FileReadingFSMStates.SearchingForTransactionDetails,
              'after': 'save_previous_balance_date', },
 
             # The transactions are all listed together, so let's find where the transactions start:
-            {'trigger': 'process', 'source': FileReadingFSMStates.SEARCHING_FOR_TRANSACTION_DETAILS,
-             'conditions': lambda line: FileReadingFSMStates.SEARCHING_FOR_TRANSACTION_DETAILS.value in line,
-             'dest': FileReadingFSMStates.SEARCHING_FOR_TRANSACTION_TYPE,
+            {'trigger': 'process', 'source': FileReadingFSMStates.SearchingForTransactionDetails,
+             'conditions': lambda line: FileReadingFSMStates.SearchingForTransactionDetails.value in line,
+             'dest': FileReadingFSMStates.SearchingForTransactionType,
              'after': 'found_search_for_xact'},
 
             # Transactions are subgrouped by type(payment to Venmo, credits / refunds, purchases)
             # (They always seem to be in PAYMENT, OTHER_CREDIT, PURCHASES order
-            {'trigger': 'process', 'source': [FileReadingFSMStates.SEARCHING_FOR_TRANSACTION_TYPE,
-                                              FileReadingFSMStates.OTHER_CREDITS,
-                                              FileReadingFSMStates.PAYMENTS],
+            {'trigger': 'process', 'source': [FileReadingFSMStates.SearchingForTransactionType,
+                                              FileReadingFSMStates.OtherCredits,
+                                              FileReadingFSMStates.Payments],
              'conditions': lambda line: FileReadingFSMStates.START_OF_PAYMENTS.value in line,
-             'dest': FileReadingFSMStates.PAYMENTS,
+             'dest': FileReadingFSMStates.Payments,
              'after': 'save_current_xact_type',},
-            {'trigger': 'process', 'source': [FileReadingFSMStates.SEARCHING_FOR_TRANSACTION_TYPE,
-                                              FileReadingFSMStates.PURCHASES,
-                                              FileReadingFSMStates.PAYMENTS, ],
+            {'trigger': 'process', 'source': [FileReadingFSMStates.SearchingForTransactionType,
+                                              FileReadingFSMStates.Purchases,
+                                              FileReadingFSMStates.Payments, ],
              'conditions': lambda line: FileReadingFSMStates.START_OF_OTHER_CREDITS.value in line,
-             'dest': FileReadingFSMStates.OTHER_CREDITS,
+             'dest': FileReadingFSMStates.OtherCredits,
              'after': 'save_current_xact_type'},
-            {'trigger': 'process', 'source': [FileReadingFSMStates.SEARCHING_FOR_TRANSACTION_TYPE,
-                                              FileReadingFSMStates.PAYMENTS,
-                                              FileReadingFSMStates.OTHER_CREDITS, ],
+            {'trigger': 'process', 'source': [FileReadingFSMStates.SearchingForTransactionType,
+                                              FileReadingFSMStates.Payments,
+                                              FileReadingFSMStates.OtherCredits, ],
              'conditions': lambda line: FileReadingFSMStates.START_OF_PURCHASES.value in line,
-             'dest': FileReadingFSMStates.PURCHASES,
+             'dest': FileReadingFSMStates.Purchases,
              'after': 'save_current_xact_type'},
 
             # Venmo always puts a boilerplate 2nd page, which interrupts the transaction list started on the 1st page
-            {'trigger': 'process', 'source': [FileReadingFSMStates.SEARCHING_FOR_TRANSACTION_TYPE,
-                                              FileReadingFSMStates.PAYMENTS,
-                                              FileReadingFSMStates.OTHER_CREDITS,
-                                              FileReadingFSMStates.PURCHASES],
+            {'trigger': 'process', 'source': [FileReadingFSMStates.SearchingForTransactionType,
+                                              FileReadingFSMStates.Payments,
+                                              FileReadingFSMStates.OtherCredits,
+                                              FileReadingFSMStates.Purchases],
              'conditions': lambda line: FileReadingFSMStates.TRANSACTIONS_CONTINUED_LATER.value in line,
-             'dest': FileReadingFSMStates.SEARCHING_FOR_TRANSACTION_DETAILS, },
+             'dest': FileReadingFSMStates.SearchingForTransactionDetails, },
 
             # Once we've found the end of the transactions we're done
-            {'trigger': 'process', 'source': [FileReadingFSMStates.SEARCHING_FOR_TRANSACTION_TYPE,
-                                              FileReadingFSMStates.PAYMENTS,
-                                              FileReadingFSMStates.PURCHASES,
-                                              FileReadingFSMStates.OTHER_CREDITS, ],
-             'conditions': lambda line: FileReadingFSMStates.FINISHED.value in line,
-             'dest': FileReadingFSMStates.FINISHED, },
+            {'trigger': 'process', 'source': [FileReadingFSMStates.SearchingForTransactionType,
+                                              FileReadingFSMStates.Payments,
+                                              FileReadingFSMStates.Purchases,
+                                              FileReadingFSMStates.OtherCredits, ],
+             'conditions': lambda line: FileReadingFSMStates.Finished.value in line,
+             'dest': FileReadingFSMStates.Finished, },
 
-            # Internal transitions MUST go last ########################################################################
-            # otherwise they'll match and transitions will stop any other real state transitions from happening
+            # Internal file_reading_transitions MUST go last ########################################################################
+            # otherwise they'll match and file_reading_transitions will stop any other real state file_reading_transitions from happening
 
             # If we've found transactions, take the next column and hand it off to the line reader
-            {'trigger': 'process', 'source': [FileReadingFSMStates.PAYMENTS,
-                                              FileReadingFSMStates.PURCHASES,
-                                              FileReadingFSMStates.OTHER_CREDITS],
+            {'trigger': 'process', 'source': [FileReadingFSMStates.Payments,
+                                              FileReadingFSMStates.Purchases,
+                                              FileReadingFSMStates.OtherCredits],
              'dest': None,  # internal transition - do this every time we call 'process' and we're in PAYMENTS
              'after': 'process_xact_chunk'},
         ]
 
 
-        # Initialize the state machine with states and transitions
-        self.machine = Machine(model=self, states=FileReaderFSM.states, transitions=transitions,
-                               initial=FileReadingFSMStates.PREVIOUS_BALANCE_DATE)
+        # Initialize the state machine with states and file_reading_transitions
+        self.machine = HierarchicalMachine(model=self, states=file_reading_states, \
+                                           transitions=file_reading_transitions, \
+                                           initial=FileReadingFSMStates.PreviousBalanceDate)
         self.previous_balance_date: date = None
-        self.current_xact_type = FileReadingFSMStates.SEARCHING_FOR_TRANSACTION_TYPE
+        self.current_xact_type = FileReadingFSMStates.SearchingForTransactionType
         self.line_reader = LineReadingFSM()
         #self.line_reader.log_state_machine.setLevel(logging.WARN)
 
@@ -268,14 +299,17 @@ class FileReaderFSM:
 
     def process_xact_chunk(self, line):
         # print(f"process_xact_chunk: {self.state} line={line}")
+        self.processXact(line)
+
         result = self.line_reader.process_line(line)
 
-        if result == LineReadingFSMStates.FINISHED:
-            if self.current_xact_type == FileReadingFSMStates.PAYMENTS:
+        if result == XactReadingFSMStates.FINISHED:
+            current_xact_type = self.current_xact_type.split('_')[0]
+            if current_xact_type == FileReadingFSMStates.Payments.name:
                 self.all_payments.append(self.line_reader.cur_xact)
-            elif self.current_xact_type == FileReadingFSMStates.OTHER_CREDITS:
+            elif current_xact_type == FileReadingFSMStates.OtherCredits.name:
                 self.all_other_credits.append(self.line_reader.cur_xact)
-            elif self.current_xact_type == FileReadingFSMStates.PURCHASES:
+            elif current_xact_type == FileReadingFSMStates.Purchases.name:
                 self.all_purchases.append(self.line_reader.cur_xact)
             else:
                 raise Exception(f"self.current_xact_type is neither PAYMENTS nor OTHER_CREDITS nor PURCHASES, but instead it's {self.current_xact_type}")
@@ -291,8 +325,8 @@ class FileReaderFSM:
         previous_balance_date = datetime.strptime(match.group(1), "%m/%d/%Y").date()
 
     def found_search_for_xact(self, line):
-        if self.current_xact_type == FileReadingFSMStates.SEARCHING_FOR_TRANSACTION_TYPE:
-            self.machine.set_state(FileReadingFSMStates.SEARCHING_FOR_TRANSACTION_TYPE)
+        if self.current_xact_type == FileReadingFSMStates.SearchingForTransactionType:
+            self.machine.set_state(FileReadingFSMStates.SearchingForTransactionType)
         else:  # otherwise keep looking for whatever sort of xact we've most recently seen:
             self.machine.set_state(self.current_xact_type)
 
@@ -315,9 +349,9 @@ def ConvertVenmoStatement(file_to_parse: str, output_file: str):
 
             for line in page_strings:
                 program_state.process(line)
-                #print(program_state.state + ": cur_xact: " + program_state.current_xact_type + " : " + line)
+                print(str(program_state.state) + ": cur_xact: " + str(program_state.current_xact_type) + " : " + line)
 
-                if program_state.state is FileReadingFSMStates.FINISHED:
+                if program_state.state is FileReadingFSMStates.Finished:
                     print("Finished parsing - exiting!")
                     raise BreakLoop
 
