@@ -93,92 +93,92 @@ class XactReadingFSMStates(Enum):
     REF: str = 'ref'
     DESC: str = 'desc'
     AMT: str = 'amt'
-    FINISHED: str = 'FINISHED READING TRANSACTION LINE'
+    XactFinished: str = 'FINISHED READING TRANSACTION LINE'
 
 reDateOfTransaction = re.compile("(\d\d/\d\d)")
 
-class LineReadingFSM:
-    xact_reading_states = [
-        XactReadingFSMStates.DATE,
-        XactReadingFSMStates.REF,
-        XactReadingFSMStates.DESC,
-        XactReadingFSMStates.AMT,
-        XactReadingFSMStates.FINISHED
-    ]
-    cur_xact: Transaction  # We'll reset this a lot
-    previous_date: date  # So remember when the last transaction was separate from cur_xact
-    def __init__(self):
-        xact_reading_transitions = [
-            {'trigger': 'process', 'source': XactReadingFSMStates.DATE,
-             'conditions': lambda line: re.search(reDateOfTransaction, line) is not None,
-             'dest': XactReadingFSMStates.REF,
-             'before': 'save_xact_date', },
-            {'trigger': 'process', 'source': XactReadingFSMStates.REF,
-             'dest': XactReadingFSMStates.DESC,
-             'after': 'save_xact_ref_num'},
-            {'trigger': 'process', 'source': XactReadingFSMStates.DESC,
-             'dest': XactReadingFSMStates.AMT,
-             'after': 'save_xact_desc'},
-            {'trigger': 'process', 'source': XactReadingFSMStates.AMT,
-             'dest': XactReadingFSMStates.FINISHED,
-             'after': 'save_xact_amt'},
-        ]
-
-
-        # Initialize the state machine with states and xact_reading_transitions
-        self.machine = Machine(model=self, states=LineReadingFSM.xact_reading_states, transitions=xact_reading_transitions,
-                               initial=XactReadingFSMStates.DATE)
-
-        self.previous_date = None
-        self.reset()
-
-    def reset(self):
-        self.cur_xact = Transaction()
-        self.machine.set_state(XactReadingFSMStates.DATE)
-
-    def save_xact_date(self, line):
-        global previous_balance_date
-        # print("FOUND A DATE!!!!!")
-        assert previous_balance_date is not None
-
-        if self.previous_date is not None:
-            xact_year = self.previous_date.year
-        else:
-            xact_year = previous_balance_date.year
-
-        xact_date = datetime.strptime(line + "/" + str(xact_year), "%m/%d/%Y").date()
-
-        # if the previous date is in last Dec & the current date is in January:
-        if self.previous_date is not None and \
-                self.previous_date.month == 12 and xact_date.month == 1:
-            xact_date = date(xact_date.year + 1, xact_date.month, xact_date.day)
-
-        # If the first date we're seeing is in January but the prior balance
-        # date is in Dec the move the year up
-        if self.previous_date is None and \
-                xact_date < previous_balance_date \
-                and previous_balance_date.month == 12 \
-                and xact_date.month == 1:
-            xact_date = date(xact_date.year + 1, xact_date.month, xact_date.day)
-
-        self.cur_xact.date = xact_date
-        self.previous_date = xact_date
-
-    def save_xact_ref_num(self, line):
-        self.cur_xact.reference_num = line
-
-    def save_xact_desc(self, line):
-        self.cur_xact.description = line
-
-    def save_xact_amt(self, line):
-        value = Decimal(re.sub(r'[^\d.]', '', line))
-        self.cur_xact.amount = value
-        # print("Found transaction: " + str(self.cur_xact))
-
-    def process_line(self, line):
-        self.process(line)
-        return self.machine.model.state
-
+# class LineReadingFSM:
+#     xact_reading_states = [
+#         XactReadingFSMStates.DATE,
+#         XactReadingFSMStates.REF,
+#         XactReadingFSMStates.DESC,
+#         XactReadingFSMStates.AMT,
+#         XactReadingFSMStates.XACT_FINISHED
+#     ]
+#     cur_xact: Transaction  # We'll reset this a lot
+#     previous_date: date  # So remember when the last transaction was separate from cur_xact
+#     def __init__(self):
+#         xact_reading_transitions = [
+#             {'trigger': 'process', 'source': XactReadingFSMStates.DATE,
+#              'conditions': lambda line: re.search(reDateOfTransaction, line) is not None,
+#              'dest': XactReadingFSMStates.REF,
+#              'before': 'save_xact_date', },
+#             {'trigger': 'process', 'source': XactReadingFSMStates.REF,
+#              'dest': XactReadingFSMStates.DESC,
+#              'after': 'save_xact_ref_num'},
+#             {'trigger': 'process', 'source': XactReadingFSMStates.DESC,
+#              'dest': XactReadingFSMStates.AMT,
+#              'after': 'save_xact_desc'},
+#             {'trigger': 'process', 'source': XactReadingFSMStates.AMT,
+#              'dest': XactReadingFSMStates.XACT_FINISHED,
+#              'after': 'save_xact_amt'},
+#         ]
+#
+#
+#         # Initialize the state machine with states and xact_reading_transitions
+#         self.machine = Machine(model=self, states=LineReadingFSM.xact_reading_states, transitions=xact_reading_transitions,
+#                                initial=XactReadingFSMStates.DATE)
+#
+#         self.previous_date = None
+#         self.reset()
+#
+#     def reset(self):
+#         self.cur_xact = Transaction()
+#         self.machine.set_state(XactReadingFSMStates.DATE)
+#
+#     def save_xact_date(self, line):
+#         global previous_balance_date
+#         # print("FOUND A DATE!!!!!")
+#         assert previous_balance_date is not None
+#
+#         if self.previous_date is not None:
+#             xact_year = self.previous_date.year
+#         else:
+#             xact_year = previous_balance_date.year
+#
+#         xact_date = datetime.strptime(line + "/" + str(xact_year), "%m/%d/%Y").date()
+#
+#         # if the previous date is in last Dec & the current date is in January:
+#         if self.previous_date is not None and \
+#                 self.previous_date.month == 12 and xact_date.month == 1:
+#             xact_date = date(xact_date.year + 1, xact_date.month, xact_date.day)
+#
+#         # If the first date we're seeing is in January but the prior balance
+#         # date is in Dec the move the year up
+#         if self.previous_date is None and \
+#                 xact_date < previous_balance_date \
+#                 and previous_balance_date.month == 12 \
+#                 and xact_date.month == 1:
+#             xact_date = date(xact_date.year + 1, xact_date.month, xact_date.day)
+#
+#         self.cur_xact.date = xact_date
+#         self.previous_date = xact_date
+#
+#     def save_xact_ref_num(self, line):
+#         self.cur_xact.reference_num = line
+#
+#     def save_xact_desc(self, line):
+#         self.cur_xact.description = line
+#
+#     def save_xact_amt(self, line):
+#         value = Decimal(re.sub(r'[^\d.]', '', line))
+#         self.cur_xact.amount = value
+#         # print("Found transaction: " + str(self.cur_xact))
+#
+#     def process_line(self, line):
+#         self.process(line)
+#         return self.machine.model.state
+#
 
 rePREVIOUS_BALANCE_DATE = re.compile("Previous balance as of (\d\d/\d\d/\d\d\d\d)")
 
@@ -189,23 +189,23 @@ class FileReaderFSM:
             XactReadingFSMStates.REF,
             XactReadingFSMStates.DESC,
             XactReadingFSMStates.AMT,
-            XactReadingFSMStates.FINISHED
+            XactReadingFSMStates.XactFinished
         ]
 
         xact_reading_transitions = [
             {'trigger': 'processXact', 'source': XactReadingFSMStates.DATE,
-             #'conditions': lambda line: re.search(reDateOfTransaction, line) is not None,
+             'conditions': lambda line: re.search(reDateOfTransaction, line) is not None,
              'dest': XactReadingFSMStates.REF,
-             'after': lambda line: print(line), },
+             'after': 'save_xact_date', },
             {'trigger': 'processXact', 'source': XactReadingFSMStates.REF,
              'dest': XactReadingFSMStates.DESC,
-             'after': lambda line: print(line), },
+             'after': 'save_xact_ref_num', },
             {'trigger': 'processXact', 'source': XactReadingFSMStates.DESC,
              'dest': XactReadingFSMStates.AMT,
-             'after': lambda line: print(line), },
+             'after': 'save_xact_desc' },
             {'trigger': 'processXact', 'source': XactReadingFSMStates.AMT,
-             'dest': XactReadingFSMStates.FINISHED,
-             'after': lambda line: print(line), },
+             'dest': XactReadingFSMStates.XactFinished,
+             'after': 'save_xact_amt_and_finish_xact' },
         ]
 
         xact_reader_fsm = HierarchicalMachine(states=xact_reading_states, \
@@ -216,7 +216,8 @@ class FileReaderFSM:
             FileReadingFSMStates.PreviousBalanceDate,
             FileReadingFSMStates.SearchingForTransactionDetails,
             FileReadingFSMStates.SearchingForTransactionType,
-            {'name': FileReadingFSMStates.Payments, 'children': xact_reader_fsm},
+            {'name': FileReadingFSMStates.Payments, 'children': xact_reader_fsm,
+                'remap':{XactReadingFSMStates.XactFinished, FileReadingFSMStates.Finished}},
             {'name': FileReadingFSMStates.OtherCredits, 'children': xact_reader_fsm},
             {'name': FileReadingFSMStates.Purchases, 'children': xact_reader_fsm},
             FileReadingFSMStates.Finished
@@ -289,34 +290,14 @@ class FileReaderFSM:
                                            transitions=file_reading_transitions, \
                                            initial=FileReadingFSMStates.PreviousBalanceDate)
         self.previous_balance_date: date = None
-        self.current_xact_type = FileReadingFSMStates.SearchingForTransactionType
-        self.line_reader = LineReadingFSM()
-        #self.line_reader.log_state_machine.setLevel(logging.WARN)
-
         self.all_payments: [Transaction] = []
         self.all_other_credits: [Transaction] = []
         self.all_purchases: [Transaction] = []
 
-    def process_xact_chunk(self, line):
-        # print(f"process_xact_chunk: {self.state} line={line}")
-        self.processXact(line)
-
-        result = self.line_reader.process_line(line)
-
-        if result == XactReadingFSMStates.FINISHED:
-            current_xact_type = self.current_xact_type.split('_')[0]
-            if current_xact_type == FileReadingFSMStates.Payments.name:
-                self.all_payments.append(self.line_reader.cur_xact)
-            elif current_xact_type == FileReadingFSMStates.OtherCredits.name:
-                self.all_other_credits.append(self.line_reader.cur_xact)
-            elif current_xact_type == FileReadingFSMStates.Purchases.name:
-                self.all_purchases.append(self.line_reader.cur_xact)
-            else:
-                raise Exception(f"self.current_xact_type is neither PAYMENTS nor OTHER_CREDITS nor PURCHASES, but instead it's {self.current_xact_type}")
-
-            self.line_reader.reset()
-
-        return result
+        # Line (Transaction) Reader:
+        self.current_xact_type = FileReadingFSMStates.SearchingForTransactionType
+        self.previous_date = None
+        self.cur_xact = Transaction()
 
     def save_previous_balance_date(self, line):
         global previous_balance_date
@@ -332,6 +313,62 @@ class FileReaderFSM:
 
     def save_current_xact_type(self, line):
         self.current_xact_type = self.machine.model.state
+
+    # Line reader methods:
+    def save_xact_date(self, line):
+        global previous_balance_date
+        # print("FOUND A DATE!!!!!")
+        assert previous_balance_date is not None
+
+        if self.previous_date is not None:
+            xact_year = self.previous_date.year
+        else:
+            xact_year = previous_balance_date.year
+
+        xact_date = datetime.strptime(line + "/" + str(xact_year), "%m/%d/%Y").date()
+
+        # if the previous date is in last Dec & the current date is in January:
+        if self.previous_date is not None and \
+                self.previous_date.month == 12 and xact_date.month == 1:
+            xact_date = date(xact_date.year + 1, xact_date.month, xact_date.day)
+
+        # If the first date we're seeing is in January but the prior balance
+        # date is in Dec the move the year up
+        if self.previous_date is None and \
+                xact_date < previous_balance_date \
+                and previous_balance_date.month == 12 \
+                and xact_date.month == 1:
+            xact_date = date(xact_date.year + 1, xact_date.month, xact_date.day)
+
+        self.cur_xact.date = xact_date
+        self.previous_date = xact_date
+
+    def save_xact_ref_num(self, line):
+        self.cur_xact.reference_num = line
+
+    def save_xact_desc(self, line):
+        self.cur_xact.description = line
+
+    def save_xact_amt_and_finish_xact(self, line):
+        value = Decimal(re.sub(r'[^\d.]', '', line))
+        self.cur_xact.amount = value
+        # print("Found transaction: " + str(self.cur_xact))
+
+        inPayments = self.machine.is_state("Payments", self, allow_substates=True)
+        inOtherCredits = self.machine.is_state("OtherCredits", self, allow_substates=True)
+        inPurchases = self.machine.is_state("Purchases", self, allow_substates=True)
+
+        if inPayments:
+            self.all_payments.append(self.cur_xact)
+        elif inOtherCredits:
+            self.all_other_credits.append(self.cur_xact)
+        elif inPurchases:
+            self.all_purchases.append(self.cur_xact)
+        else:
+            raise Exception(f"self.current_xact_type is neither PAYMENTS nor OTHER_CREDITS nor PURCHASES, but instead it's {self.current_xact_type}")
+
+        self.cur_xact = Transaction()
+        self.machine.set_state(XactReadingFSMStates.DATE)
 
 
 class BreakLoop(Exception): pass # ChatGPT gave me this terrible hack;  I'm totally gonna use it :)
