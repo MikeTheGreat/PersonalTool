@@ -19,34 +19,14 @@ import re
 from datetime import date, datetime
 from decimal import *
 from operator import attrgetter
-from typing import Any
 
-from attrs import define
 from pdfreader import SimplePDFViewer
 from transitions import Machine
 
+from finance.transaction import Transaction
+
 previous_balance_date: date = None
 
-@define
-class Transaction:
-    date: Any = None
-    reference_num: str = ""
-    description: str = ""
-    amount: Decimal = 0
-
-    @classmethod
-    def get_csv_header(self):
-        return ["Date", "Reference Num", "Description", "Amount"]
-
-    # Make the transaction iterable
-    # so that csv.writer can print it to a file
-    def __iter__(self):
-        for each in self.__slots__:
-            if not each.startswith('__'):
-                yield getattr(self, each, None)
-
-    def __str__(self):
-        return f'Transaction({self.amount},\t{self.reference_num},\t{self.description})'
 
 class FileReadingFSMStates(Enum):
     PREVIOUS_BALANCE_DATE = "Previous balance as of"
@@ -230,7 +210,7 @@ class FileReaderFSM:
                 and xact_date.month == 1:
             xact_date = date(xact_date.year + 1, xact_date.month, xact_date.day)
 
-        self.cur_xact.date = xact_date
+        self.cur_xact.xact_date = xact_date
         self.previous_date = xact_date
 
     def save_xact_ref_num(self, line):
@@ -296,10 +276,10 @@ def ConvertVenmoStatement(file_to_parse: str, output_file: str):
 
     ### Write transactions to the file
     #  Make payments & credits negative, leave purchases positive
-    all_xacts = [Transaction(xact.date, xact.reference_num, xact.description, -1 * xact.amount) for xact in
+    all_xacts = [Transaction(None, xact.xact_date, xact.reference_num, xact.description, -1 * xact.amount) for xact in
                  program_state.all_payments + program_state.all_other_credits] \
                 + program_state.all_purchases
-    all_xacts.sort(key=attrgetter('date'))
+    all_xacts.sort(key=attrgetter('xact_date'))
 
     with open(output_file, 'w', newline='') as csvfile:
         csv_writer = csv.writer(csvfile)

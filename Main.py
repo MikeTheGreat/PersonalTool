@@ -30,6 +30,9 @@ import os
 import sys
 
 from colorama import init
+
+from finance.becu_visa import ConvertBecuStatement
+
 init()
 
 import stackprinter
@@ -43,6 +46,17 @@ from finance.venmo import ConvertVenmoStatement
 # # install()
 
 #region Functions to handle menu options
+def fnConvertBECUVISAToCSV(args):
+    print(
+        f'\nConvert BECU VISA PDF statements to CSV files:\n\tSRC:\t{args.SRC}\n\tDEST:\t{args.DEST}\n')
+
+    if not os.path.isfile(args.SRC):
+        print("'SRC' argument must be a file but isn't")
+        sys.exit()
+
+    # do the conversion:
+    ConvertBecuStatement(args.SRC, args.DEST)
+
 def fnConvertVenmoToCSV(args):
     print(
         f'\nConvert Venmo PDF statements to CSV files:\n\tSRC:\t{args.SRC}\n\tDEST:\t{args.DEST}\n')
@@ -81,20 +95,29 @@ def CLI():
 #region Venmo Utils
     ################################# Venmo Utils ################################################
     def setup_exam_gen_parsers(subparsers):
-        szSummary = 'Venmo Utils'
-        szHelp = 'Tools to deal with Venmo statements, etc'
-        parser_exams = subparsers.add_parser('v',
-                                                aliases=['v'],
+        szSummary = 'Finance Utils'
+        szHelp = 'Tools to deal with Venmo statements, BECU VISA statements, etc'
+        parser_exams = subparsers.add_parser('f',
+                                                aliases=['f'],
                                                 parents=[parser_verbose],
                                                 help=szSummary,
                                                 description=szHelp)
 
-        venmo_subparsers = parser_exams.add_subparsers(dest='subcommand',
-                                                                   help="Help for the Venmo utils")
+        venmo_subparsers = parser_exams.add_subparsers(dest='subcommand', help="Help for the finance utils")
+
+        szSummary = 'Convert BECU VISA Statements (PDF to CSV)'
+        szHelp = 'Read the BECU VISA monthly statement (a PDF, via SRC) and write the transactions to DEST (a CSV)'
+        parser_exam_gen = venmo_subparsers.add_parser('convert_statement',
+                                                aliases=['b'],
+                                                parents=[parser_src_dest],
+                                                help=szSummary,
+                                                description=szHelp)
+        parser_exam_gen.set_defaults(func=fnConvertBECUVISAToCSV)
+
         szSummary = 'Convert Venmo Statements (PDF to CSV)'
         szHelp = 'Read the Venmo monthly statement (a PDF, via SRC) and write the transactions to DEST (a CSV)'
         parser_exam_gen = venmo_subparsers.add_parser('convert_statement',
-                                                aliases=['c'],
+                                                aliases=['v'],
                                                 parents=[parser_src_dest],
                                                 help=szSummary,
                                                 description=szHelp)
