@@ -215,7 +215,7 @@ def ConvertBecuStatement(file_to_parse: str, output_file: str):
 
     with open(output_file, 'w', newline='') as csvfile:
         csv_writer = csv.writer(csvfile)
-        csv_writer.writerow(["Account Name: Venmo Credit Card"]) # With this here KMM won't ask for the account name
+        csv_writer.writerow(["Account Name: BECU VISA Card"]) # With this here KMM won't ask for the account name
         csv_writer.writerow(Transaction.get_csv_header())
         csv_writer.writerows(all_xacts)
 
